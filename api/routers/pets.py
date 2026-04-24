@@ -17,6 +17,8 @@ class PetCreate(BaseModel):
     name: str
     species: str  # 'dog' | 'cat'
     breed: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = None
     rg_animal_id: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
@@ -42,6 +44,16 @@ async def create_pet(
     await db.commit()
     await db.refresh(pet)
     return _serialize(pet)
+
+
+@router.get("", summary="Listar meus pets")
+async def list_my_pets(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(Pet).where(Pet.owner_id == UUID(user_id)))
+    pets = result.scalars().all()
+    return [_serialize(p) for p in pets]
 
 
 @router.get("/{pet_id}", summary="Buscar pet por ID")
