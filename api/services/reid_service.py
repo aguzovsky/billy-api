@@ -116,18 +116,17 @@ class PetReIDService:
         Real implementation should also run nose detection confidence.
         """
         try:
-            img = Image.open(io.BytesIO(image_bytes)).convert("L")  # grayscale
-            arr = np.array(img, dtype=np.float32)
-
             # Sharpness: variance of Laplacian
-            from PIL import ImageFilter
-            lap = np.array(img.filter(ImageFilter.Kernel(
-                size=3, kernel=[-1, -1, -1, -1, 8, -1, -1, -1, -1], scale=1, offset=128
-            )), dtype=np.float32)
-            sharpness = float(np.var(lap)) / 1000.0  # normalise empirically
+            import cv2
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img_gray = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            if img_gray is None:
+                return 0.0
+            lap = cv2.Laplacian(img_gray, cv2.CV_64F)
+            sharpness = float(np.var(lap)) / 1000.0
 
             # Brightness: penalise very dark or very bright
-            mean_brightness = float(arr.mean()) / 255.0
+            mean_brightness = float(img_gray.mean()) / 255.0
             brightness_score = 1.0 - abs(mean_brightness - 0.5) * 2
 
             score = 0.6 * min(sharpness, 1.0) + 0.4 * max(brightness_score, 0.0)
