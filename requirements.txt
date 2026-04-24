@@ -1,0 +1,38 @@
+# API
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Database
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+alembic==1.13.1
+pgvector==0.3.2
+
+# Cache
+redis[asyncio]==5.0.4
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Config
+pydantic-settings==2.2.1
+
+# Image processing
+pillow==10.3.0
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+
+# Storage
+boto3==1.34.93
+
+# Throttle
+slowapi==0.1.9
+
+# AI (fastreid needs torch, already in base image)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Monitoring
+structlog==24.1.0
