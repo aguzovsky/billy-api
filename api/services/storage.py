@@ -30,16 +30,21 @@ def _get_client():
     return _client
 
 
-async def upload_photo(image_bytes: bytes, content_type: str = "image/jpeg") -> str:
-    """Uploads photo and returns public URL (or key for private bucket)."""
-    key = f"pets/{uuid.uuid4()}.jpg"
-    client = _get_client()
-    client.put_object(
-        Bucket=settings.minio_bucket,
-        Key=key,
-        Body=io.BytesIO(image_bytes),
-        ContentType=content_type,
-    )
-    endpoint = settings.minio_endpoint
-    scheme = "https" if settings.minio_secure else "http"
-    return f"{scheme}://{endpoint}/{settings.minio_bucket}/{key}"
+async def upload_photo(image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
+    """Uploads photo and returns public URL. Returns None if storage is unavailable."""
+    try:
+        key = f"pets/{uuid.uuid4()}.jpg"
+        client = _get_client()
+        client.put_object(
+            Bucket=settings.minio_bucket,
+            Key=key,
+            Body=io.BytesIO(image_bytes),
+            ContentType=content_type,
+        )
+        endpoint = settings.minio_endpoint
+        scheme = "https" if settings.minio_secure else "http"
+        return f"{scheme}://{endpoint}/{settings.minio_bucket}/{key}"
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Photo upload failed (storage unavailable): %s", exc)
+        return None
