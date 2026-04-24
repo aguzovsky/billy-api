@@ -34,4 +34,15 @@ class Settings(BaseSettings):
     max_image_size_mb: int = 10
 
 
-settings = Settings()
+def _make_settings() -> Settings:
+    s = Settings()
+    # Railway provides postgresql:// but asyncpg needs postgresql+asyncpg://
+    url = s.database_url
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        object.__setattr__(s, "database_url", url)
+    return s
+
+
+settings = _make_settings()
