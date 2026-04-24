@@ -70,6 +70,66 @@ async def create_alert(
     }
 
 
+@router.get("/mine", summary="Meus alertas emitidos")
+async def my_alerts(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    from sqlalchemy import select as sa_select
+    q = (
+        sa_select(Alert)
+        .join(Pet, Alert.pet_id == Pet.id)
+        .where(Pet.owner_id == UUID(user_id))
+        .order_by(Alert.created_at.desc())
+    )
+    result = await db.execute(q)
+    alerts = result.scalars().all()
+
+    pet_ids = [a.pet_id for a in alerts]
+    pets_result = await db.execute(sa_select(Pet).where(Pet.id.in_(pet_ids)))
+    pets_map = {p.id: p for p in pets_result.scalars().all()}
+
+    return [
+        {
+            "id": str(a.id),
+            "pet_id": str(a.pet_id),
+            "pet_name": pets_map.get(a.pet_id, Pet()).name,
+            "pet_species": pets_map.get(a.pet_id, Pet()).species,
+            "alert_type": a.alert_type,
+            "status": a.status,
+            "description": a.description,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in alerts
+    ]
+
+
+@router.patch("/{alert_id}/resolve", summary="Marcar alerta como resolvido")
+async def resolve_alert(
+    alert_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    from sqlalchemy import select as sa_select
+    result = await db.execute(
+        sa_select(Alert)
+        .join(Pet, Alert.pet_id == Pet.id)
+        .where(Alert.id == UUID(alert_id), Pet.owner_id == UUID(user_id))
+    )
+    alert = result.scalar_one_or_none()
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found or not owned by you")
+
+    alert.status = "resolved"
+    pet_result = await db.execute(sa_select(Pet).where(Pet.id == alert.pet_id))
+    pet = pet_result.scalar_one_or_none()
+    if pet:
+        pet.status = "home"
+
+    await db.commit()
+    return {"status": "resolved"}
+
+
 @router.get("", summary="Buscar alertas próximos por geolocalização")
 async def list_alerts(
     lat: Optional[float] = Query(None, description="Latitude"),
