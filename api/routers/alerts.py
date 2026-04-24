@@ -72,13 +72,43 @@ async def create_alert(
 
 @router.get("", summary="Buscar alertas próximos por geolocalização")
 async def list_alerts(
-    lat: float = Query(..., description="Latitude"),
-    lng: float = Query(..., description="Longitude"),
+    lat: Optional[float] = Query(None, description="Latitude"),
+    lng: Optional[float] = Query(None, description="Longitude"),
     radius_km: int = Query(10, ge=1, le=500),
     alert_type: Optional[str] = Query(None, description="lost | found"),
     db: AsyncSession = Depends(get_db),
 ):
-    alerts = await find_alerts_near(
-        db=db, lat=lat, lng=lng, radius_km=radius_km, alert_type=alert_type
-    )
+    if lat is not None and lng is not None:
+        alerts = await find_alerts_near(
+            db=db, lat=lat, lng=lng, radius_km=radius_km, alert_type=alert_type
+        )
+    else:
+        # Return all active alerts when no location provided
+        from sqlalchemy import select as sa_select
+        from api.models.alert import Alert
+        q = sa_select(Alert).where(Alert.status == "active").order_by(Alert.created_at.desc()).limit(50)
+        if alert_type:
+            q = q.where(Alert.alert_type == alert_type)
+        result = await db.execute(q)
+        raw = result.scalars().all()
+        # Load pet names in one query
+        pet_ids = [a.pet_id for a in raw]
+        pets_result = await db.execute(sa_select(Pet).where(Pet.id.in_(pet_ids)))
+        pets_map = {p.id: p for p in pets_result.scalars().all()}
+
+        alerts = [
+            {
+                "id": str(a.id),
+                "pet_id": str(a.pet_id),
+                "pet_name": pets_map.get(a.pet_id, Pet()).name,
+                "pet_species": pets_map.get(a.pet_id, Pet()).species,
+                "alert_type": a.alert_type,
+                "description": a.description,
+                "lat": a.lat,
+                "lng": a.lng,
+                "distance_km": None,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in raw
+        ]
     return {"count": len(alerts), "alerts": alerts}
