@@ -39,3 +39,4 @@ class Pet(Base):
     owner = relationship("User", back_populates="pets")
     biometrics = relationship("Biometric", back_populates="pet", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="pet", cascade="all, delete-orphan")
+    guardians = relationship("PetGuardian", back_populates="pet", cascade="all, delete-orphan")
