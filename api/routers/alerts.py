@@ -25,6 +25,13 @@ class AlertCreate(BaseModel):
     photo_url: Optional[str] = None
 
 
+class FoundPetReport(BaseModel):
+    species: str = "dog"  # 'dog' | 'cat'
+    description: Optional[str] = None
+    lat: float = 0.0
+    lng: float = 0.0
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Emitir alerta de pet perdido/encontrado")
 async def create_alert(
     body: AlertCreate,
@@ -128,6 +135,35 @@ async def resolve_alert(
 
     await db.commit()
     return {"status": "resolved"}
+
+
+@router.post("/report-found", status_code=status.HTTP_201_CREATED, summary="Reportar pet encontrado/abandonado")
+async def report_found_pet(
+    body: "FoundPetReport",
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    pet = Pet(
+        name="Pet encontrado",
+        species=body.species,
+        owner_id=UUID(user_id),
+        status="found",
+    )
+    db.add(pet)
+    await db.flush()
+
+    alert = Alert(
+        pet_id=pet.id,
+        alert_type="found",
+        description=body.description,
+        lat=body.lat,
+        lng=body.lng,
+        radius_km=10,
+    )
+    db.add(alert)
+    await db.commit()
+    await db.refresh(alert)
+    return {"id": str(alert.id), "pet_id": str(pet.id), "status": "active"}
 
 
 @router.get("", summary="Buscar alertas próximos por geolocalização")
