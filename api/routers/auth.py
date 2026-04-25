@@ -1,10 +1,12 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.database import get_db
-from api.core.security import create_access_token, hash_password, verify_password
+from api.core.security import create_access_token, get_current_user_id, hash_password, verify_password
 from api.models.pet import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -54,3 +56,56 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     token = create_access_token(str(user.id))
     return {"access_token": token, "token_type": "bearer", "user_id": str(user.id)}
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = None
+    contact_phone: str | None = None
+    neighborhood: str | None = None
+
+
+@router.get("/me", summary="Meu perfil")
+async def get_me(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "id": str(user.id),
+        "name": user.name,
+        "email": user.email,
+        "contact_phone": user.contact_phone,
+        "neighborhood": user.neighborhood,
+    }
+
+
+@router.patch("/me", summary="Atualizar perfil")
+async def update_me(
+    body: UpdateProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if body.name is not None:
+        user.name = body.name
+    if body.contact_phone is not None:
+        user.contact_phone = body.contact_phone
+    if body.neighborhood is not None:
+        user.neighborhood = body.neighborhood
+
+    await db.commit()
+    await db.refresh(user)
+    return {
+        "id": str(user.id),
+        "name": user.name,
+        "email": user.email,
+        "contact_phone": user.contact_phone,
+        "neighborhood": user.neighborhood,
+    }
