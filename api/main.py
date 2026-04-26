@@ -14,9 +14,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm up the ReID model on startup so the first request isn't slow
-    from api.services.reid_service import get_reid_service
-    get_reid_service()
+    # Model loads lazily on first biometry request (not at startup)
     yield
 
 

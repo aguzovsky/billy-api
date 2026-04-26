@@ -18,15 +18,11 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    import torch
-    import torchvision.transforms as T
-    from PIL import Image, ImageFilter
-
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
-    logger.warning("torch/torchvision not available — Reid service running in stub mode")
+# Heavy imports (torch, torchvision, PIL) are deferred to first use.
+# This keeps startup RAM ~150MB instead of ~800MB.
+def _torch_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("torch") is not None
 
 EMBEDDING_DIMS = 2048
 _MEAN = [0.485, 0.456, 0.406]
@@ -34,6 +30,7 @@ _STD = [0.229, 0.224, 0.225]
 
 
 def _build_transform():
+    import torchvision.transforms as T
     return T.Compose([
         T.Resize((256, 256)),
         T.CenterCrop(224),
@@ -46,20 +43,21 @@ class PetReIDService:
     def __init__(self, weights_dir: str):
         self.weights_dir = Path(weights_dir)
         self.predictors: list = []
-        self._transform = _build_transform() if _TORCH_AVAILABLE else None
+        self._transform = _build_transform() if _torch_available() else None
         self._device = self._resolve_device()
         self._load_ensemble()
 
     def _resolve_device(self) -> str:
-        if not _TORCH_AVAILABLE:
+        if not _torch_available():
             return "cpu"
+        import torch
         from api.core.config import settings
         if settings.model_device == "cuda" and torch.cuda.is_available():
             return "cuda"
         return "cpu"
 
     def _load_ensemble(self) -> None:
-        if not _TORCH_AVAILABLE:
+        if not _torch_available():
             logger.warning("Running in stub mode (no torch). Returning random embeddings.")
             return
 
@@ -95,6 +93,7 @@ class PetReIDService:
         if not self.predictors:
             return self._stub_embedding()
 
+        import torch
         img_tensor = self._preprocess(image_bytes)
         raw_embeddings = []
         for predictor in self.predictors:
@@ -140,6 +139,7 @@ class PetReIDService:
     # ------------------------------------------------------------------
 
     def _preprocess(self, image_bytes: bytes):
+        from PIL import Image
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         tensor = self._transform(img).unsqueeze(0)  # (1, C, H, W)
         return tensor
