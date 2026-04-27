@@ -11,10 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Install CPU-only PyTorch first (much smaller than default CUDA version)
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-# Install remaining dependencies
+# Install all dependencies (torch excluded — stub mode active until dedicated ML service)
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
