@@ -9,7 +9,7 @@ from typing import Optional
 from api.core.database import get_db
 from api.core.security import get_current_user_id
 from api.models.pet import Pet
-from api.services.storage import upload_file
+from api.services.storage import upload_photo
 
 router = APIRouter(prefix="/pets", tags=["pets"])
 
@@ -65,7 +65,7 @@ async def upload_pet_photo(
     filename = f"pets/{pet_id}/{photo.filename or 'photo.jpg'}"
 
     try:
-        photo_url = await upload_file(image_bytes, filename, photo.content_type or "image/jpeg")
+        photo_url = await upload_photo(image_bytes, photo.content_type or "image/jpeg")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao fazer upload: {str(e)}")
 
