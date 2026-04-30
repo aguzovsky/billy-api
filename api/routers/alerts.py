@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,32 +34,45 @@ class FoundPetReport(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Emitir alerta de pet perdido/encontrado")
 async def create_alert(
-    body: AlertCreate,
+    pet_id: str = Form(...),
+    alert_type: str = Form(...),
+    lat: float = Form(0.0),
+    lng: float = Form(0.0),
+    radius_km: int = Form(10),
+    description: Optional[str] = Form(None),
+    photo: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    if body.alert_type not in ("lost", "found"):
+    if alert_type not in ("lost", "found"):
         raise HTTPException(status_code=400, detail="alert_type must be 'lost' or 'found'")
 
     # Verify ownership
     result = await db.execute(
-        select(Pet).where(Pet.id == UUID(body.pet_id), Pet.owner_id == UUID(user_id))
+        select(Pet).where(Pet.id == UUID(pet_id), Pet.owner_id == UUID(user_id))
     )
     pet = result.scalar_one_or_none()
     if pet is None:
         raise HTTPException(status_code=404, detail="Pet not found or not owned by you")
 
+    # Upload photo if provided
+    photo_url = None
+    if photo and photo.filename:
+        from api.services.storage import upload_photo
+        image_bytes = await photo.read()
+        photo_url = await upload_photo(image_bytes, photo.content_type or "image/jpeg")
+
     alert = Alert(
-        pet_id=UUID(body.pet_id),
-        alert_type=body.alert_type,
-        description=body.description,
-        lat=body.lat,
-        lng=body.lng,
-        radius_km=body.radius_km,
-        photo_url=body.photo_url,
+        pet_id=UUID(pet_id),
+        alert_type=alert_type,
+        description=description,
+        lat=lat,
+        lng=lng,
+        radius_km=radius_km,
+        photo_url=photo_url,
     )
     # Keep pet status in sync
-    pet.status = body.alert_type  # 'lost' | 'found'
+    pet.status = alert_type  # 'lost' | 'found'
 
     db.add(alert)
     await db.commit()
