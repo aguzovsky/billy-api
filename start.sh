@@ -2,18 +2,17 @@
 set -e
 python -c "
 import asyncio, os
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import text
+import asyncpg
 
 async def migrate():
-    engine = create_async_engine(os.environ['DATABASE_URL'])
-    async with engine.begin() as conn:
-        await conn.execute(text('''
-            ALTER TABLE users 
-            ADD COLUMN IF NOT EXISTS reset_token VARCHAR(6),
-            ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ
-        '''))
-    await engine.dispose()
+    url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://', 'postgresql://')
+    conn = await asyncpg.connect(url)
+    await conn.execute('''
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS reset_token VARCHAR(6),
+        ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ
+    ''')
+    await conn.close()
 
 asyncio.run(migrate())
 "
