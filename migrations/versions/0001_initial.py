@@ -7,7 +7,8 @@ Create Date: 2026-04-30
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, VECTOR
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from pgvector.sqlalchemy import Vector
 
 revision = '0001'
 down_revision = None
@@ -68,7 +69,7 @@ def upgrade():
     op.create_table('biometrics',
         sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
         sa.Column('pet_id', UUID(as_uuid=True), sa.ForeignKey('pets.id'), nullable=False),
-        sa.Column('embedding', VECTOR(2048), nullable=False),
+        sa.Column('embedding', Vector(2048), nullable=False),
         sa.Column('quality_score', sa.Float, nullable=True),
         sa.Column('capture_metadata', JSONB, nullable=True),
         sa.Column('registered_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
