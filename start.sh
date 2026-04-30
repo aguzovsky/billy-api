@@ -1,4 +1,4 @@
 #!/bin/bash
 set -e
-alembic upgrade heads
+alembic upgrade 0003
 exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}
