@@ -34,5 +34,8 @@ slowapi==0.1.9
 # AI — torch/torchvision excluded in MVP (stub mode, no model weights)
 # Add back when migrating ML to dedicated service (Modal/Replicate)
 
+# HTTP client (email via Resend API)
+httpx==0.27.0
+
 # Monitoring
 structlog==24.1.0

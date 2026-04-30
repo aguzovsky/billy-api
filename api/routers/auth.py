@@ -1,15 +1,31 @@
+import random
+import re
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import create_access_token, get_current_user_id, hash_password, verify_password
 from api.models.pet import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _validate_password_strength(password: str) -> str:
+    """Valida força da senha: mín. 8 chars, 1 maiúscula, 1 número."""
+    if len(password) < 8:
+        raise ValueError("A senha deve ter pelo menos 8 caracteres.")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("A senha deve conter pelo menos uma letra maiúscula.")
+    if not re.search(r"[0-9]", password):
+        raise ValueError("A senha deve conter pelo menos um número.")
+    return password
 
 
 class RegisterRequest(BaseModel):
@@ -18,6 +34,11 @@ class RegisterRequest(BaseModel):
     password: str
     contact_phone: str | None = None
     neighborhood: str | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class LoginRequest(BaseModel):
@@ -109,3 +130,79 @@ async def update_me(
         "contact_phone": user.contact_phone,
         "neighborhood": user.neighborhood,
     }
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        return _validate_password_strength(v)
+
+
+async def _send_reset_email(to_email: str, code: str) -> None:
+    if not settings.resend_api_key:
+        return
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.resend_from_email,
+                "to": [to_email],
+                "subject": "Seu código de recuperação — Billy",
+                "html": (
+                    f"<p>Olá!</p>"
+                    f"<p>Seu código de recuperação de senha é:</p>"
+                    f"<h2 style='letter-spacing:8px'>{code}</h2>"
+                    f"<p>Este código expira em <strong>15 minutos</strong>.</p>"
+                    f"<p>Se você não solicitou isso, ignore este e-mail.</p>"
+                ),
+            },
+            timeout=10.0,
+        )
+
+
+@router.post("/forgot-password", status_code=200, summary="Solicitar código de recuperação")
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    # Sempre retorna 200 para não vazar se o email existe
+    if user:
+        code = f"{random.randint(0, 999999):06d}"
+        user.reset_token = code
+        user.reset_token_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+        await db.commit()
+        await _send_reset_email(user.email, code)
+
+    return {"message": "Se o e-mail estiver cadastrado, você receberá um código em instantes."}
+
+
+@router.post("/reset-password", status_code=200, summary="Redefinir senha com código")
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if (
+        not user
+        or not user.reset_token
+        or user.reset_token != body.code
+        or not user.reset_token_expires
+        or user.reset_token_expires < datetime.now(timezone.utc)
+    ):
+        raise HTTPException(status_code=400, detail="Código inválido ou expirado.")
+
+    user.hashed_password = hash_password(body.new_password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    await db.commit()
+
+    return {"message": "Senha redefinida com sucesso."}

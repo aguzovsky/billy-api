@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     minio_bucket: str = "billy-photos"
     minio_secure: bool = False
 
+    # Email (Resend)
+    resend_api_key: str = ""
+    resend_from_email: str = "Billy App <noreply@billyapp.com.br>"
+
     # Quality thresholds
     min_quality_score: float = 0.6
     default_min_confidence: float = 0.75

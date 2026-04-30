@@ -18,6 +18,8 @@ class User(Base):
     contact_phone = Column(String(20))
     neighborhood = Column(String(100))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    reset_token = Column(String(6))
+    reset_token_expires = Column(DateTime(timezone=True))
 
     pets = relationship("Pet", back_populates="owner")
 
@@ -29,11 +31,12 @@ class Pet(Base):
     name = Column(String(100), nullable=False)
     species = Column(String(10), nullable=False)  # 'dog' | 'cat'
     breed = Column(String(100))
+    color = Column(String(100))   # NOVO — cor do pelo
+    gender = Column(String(10))   # NOVO — 'male' | 'female'
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     rg_animal_id = Column(String(50))
     status = Column(String(20), default="home")  # 'home' | 'lost' | 'found'
     photo_url = Column(Text)
-    # location stored as WKT via raw SQL / PostGIS; see geo_service.py
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     owner = relationship("User", back_populates="pets")
