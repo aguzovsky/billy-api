@@ -1,7 +1,7 @@
 """Add reset_token fields to users
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: 0003
+Revises: dfa2f2e1adb2
 Create Date: 2026-04-29
 
 """
