@@ -23,16 +23,22 @@ class Settings(BaseSettings):
     model_weights_dir: str = "./weights"
     model_device: str = "cuda"
 
-    # Storage (S3/MinIO)
+    # Storage - MinIO (local dev)
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "billy-photos"
     minio_secure: bool = False
 
+    # Storage - AWS S3 (produção)
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_s3_bucket: str = "appbilly-photos"
+    aws_s3_region: str = "us-east-2"
+
     # Email (Resend)
     resend_api_key: str = ""
-    resend_from_email: str = "Billy App <noreply@billyapp.com.br>"
+    resend_from_email: str = "Billy App <noreply@appbilly.com.br>"
 
     # Quality thresholds
     min_quality_score: float = 0.6
