@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     model_weights_dir: str = "./weights"
     model_device: str = "cuda"
 
+    # Modal.com — endpoint GPU para Pet-ReID
+    modal_endpoint_url: str = ""
+
     # Storage - MinIO (local dev)
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
