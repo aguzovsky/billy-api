@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from_email: str = "Billy App <noreply@appbilly.com.br>"
 
+    # Google Places
+    google_places_api_key: str = ""
+    places_default_radius_km: int = 5
+
     # Quality thresholds
     min_quality_score: float = 0.6
     default_min_confidence: float = 0.75
