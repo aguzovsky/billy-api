@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from_email: str = "Billy App <noreply@appbilly.com.br>"
 
+    # Anthropic — Billy AI
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
+
     # Google Places
     google_places_api_key: str = ""
     places_default_radius_km: int = 5
