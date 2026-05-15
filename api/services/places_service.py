@@ -18,6 +18,8 @@ _TYPE_MAP: dict[str, list[str]] = {
     "vet": ["veterinary_care"],
     "pet_store": ["pet_store"],
     "park": ["dog_park"],
+    "groomer": ["pet_grooming"],
+    "veterinary_care": ["veterinary_care"],
 }
 
 _LISTING_MASK = ",".join([

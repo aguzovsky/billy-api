@@ -31,7 +31,9 @@ async def find_similar_pets(
     embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
     if lat is not None and lng is not None:
-        query = text(f"""
+        # TODO: suporte geográfico no identify depende de colunas/tabela de localização
+        # Por ora, lat/lng recebidos são ignorados — busca global por similaridade coseno
+        query = text("""
             SELECT
                 b.id            AS biometry_id,
                 b.pet_id,
@@ -45,22 +47,16 @@ async def find_similar_pets(
                 u.contact_phone,
                 u.neighborhood,
                 1 - (b.embedding <=> :embedding ::vector)  AS confidence,
-                {_HAVERSINE_KM}                             AS distance_km
+                NULL                                        AS distance_km
             FROM biometrics b
             JOIN pets p ON p.id = b.pet_id
             JOIN users u ON u.id = p.owner_id
-            WHERE
-                1 - (b.embedding <=> :embedding ::vector) >= :min_confidence
-                AND p.lat IS NOT NULL AND p.lng IS NOT NULL
-                AND {_HAVERSINE_KM} <= :radius_km
+            WHERE 1 - (b.embedding <=> :embedding ::vector) >= :min_confidence
             ORDER BY confidence DESC
             LIMIT :top_k
         """)
         params = {
             "embedding": embedding_str,
-            "lat": lat,
-            "lng": lng,
-            "radius_km": search_radius_km,
             "min_confidence": min_confidence,
             "top_k": top_k,
         }
@@ -96,7 +92,7 @@ async def find_similar_pets(
     result = await db.execute(query, params)
     rows = result.mappings().all()
 
-    matches = []
+    matches: list[dict] = []
     for rank, row in enumerate(rows, start=1):
         pet_info = {
             "id": str(row["pet_id"]),
@@ -124,3 +120,29 @@ async def find_similar_pets(
         })
 
     return matches
+
+
+async def diagnostic_top1(db: AsyncSession, embedding: list[float]) -> dict:
+    """
+    Retorna o melhor score e pet_id independente de threshold — só para logging de diagnóstico.
+    Não é usado na lógica de identify; chamado apenas quando result está vazio.
+    """
+    embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+    query = text("""
+        SELECT
+            b.pet_id,
+            1 - (b.embedding <=> :embedding ::vector) AS score,
+            (SELECT COUNT(*) FROM biometrics)          AS total_in_db
+        FROM biometrics b
+        ORDER BY score DESC
+        LIMIT 1
+    """)
+    result = await db.execute(query, {"embedding": embedding_str})
+    row = result.mappings().first()
+    if row is None:
+        return {"best_score": None, "best_pet_id": None, "total_in_db": 0}
+    return {
+        "best_score": round(float(row["score"]), 4),
+        "best_pet_id": str(row["pet_id"]),
+        "total_in_db": int(row["total_in_db"]),
+    }

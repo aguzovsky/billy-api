@@ -7,6 +7,7 @@ Biometry endpoints:
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Optional
 from uuid import UUID
@@ -20,6 +21,8 @@ from api.core.security import get_current_user_id
 from api.models.biometry import Biometric
 from api.services import reid_service as reid_module
 from api.services import vector_db, storage
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/biometry", tags=["biometry"])
 
@@ -137,6 +140,9 @@ async def identify_pet(
 
     embedding = reid.extract_embedding(image_bytes)
 
+    stub_mode = not reid.modal_url
+    model_id = "stub_seed42" if stub_mode else "modal_resnet50_imagenet"
+
     results = await vector_db.find_similar_pets(
         db=db,
         embedding=embedding,
@@ -148,6 +154,27 @@ async def identify_pet(
     )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    if results:
+        best = results[0]
+        logger.info(
+            "[biometry.identify] threshold=%.2f best_score=%.4f best_pet_id=%s "
+            "candidates=%d matched=true stub_mode=%s model=%s ms=%d",
+            min_confidence, best["confidence"], best["pet"]["id"],
+            len(results), stub_mode, model_id, elapsed_ms,
+        )
+    else:
+        diag = await vector_db.diagnostic_top1(db, embedding)
+        logger.info(
+            "[biometry.identify] threshold=%.2f best_score=%s best_pet_id=%s "
+            "candidates=0 matched=false stub_mode=%s model=%s total_in_db=%d ms=%d",
+            min_confidence,
+            f"{diag['best_score']:.4f}" if diag["best_score"] is not None else "N/A",
+            diag["best_pet_id"] or "N/A",
+            stub_mode, model_id,
+            diag["total_in_db"],
+            elapsed_ms,
+        )
 
     return {
         "matched": len(results) > 0,
