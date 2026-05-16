@@ -26,10 +26,11 @@ class AlertCreate(BaseModel):
 
 
 class FoundPetReport(BaseModel):
-    species: str = "dog"  # 'dog' | 'cat'
+    species: str = "dog"  # 'dog' | 'cat' | 'other'
     description: Optional[str] = None
-    lat: float = 0.0
-    lng: float = 0.0
+    location_text: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Emitir alerta de pet perdido/encontrado")
@@ -152,7 +153,7 @@ async def resolve_alert(
 
 @router.post("/report-found", status_code=status.HTTP_201_CREATED, summary="Reportar pet encontrado/abandonado")
 async def report_found_pet(
-    body: "FoundPetReport",
+    body: FoundPetReport,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -169,6 +170,7 @@ async def report_found_pet(
         pet_id=pet.id,
         alert_type="found",
         description=body.description,
+        location_text=body.location_text,
         lat=body.lat,
         lng=body.lng,
         radius_km=10,

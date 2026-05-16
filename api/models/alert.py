@@ -15,8 +15,9 @@ class Alert(Base):
     pet_id = Column(UUID(as_uuid=True), ForeignKey("pets.id", ondelete="CASCADE"), nullable=False)
     alert_type = Column(String(20), nullable=False)  # 'lost' | 'found'
     description = Column(Text)
-    lat = Column(Float, nullable=False)
-    lng = Column(Float, nullable=False)
+    location_text = Column(Text)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
     radius_km = Column(Integer, default=10)
     photo_url = Column(Text)
     status = Column(String(20), default="active")  # 'active' | 'resolved'
