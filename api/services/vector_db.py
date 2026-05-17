@@ -30,64 +30,41 @@ async def find_similar_pets(
 ) -> list[dict]:
     embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
+    _select = """
+            SELECT
+                b.id            AS biometry_id,
+                b.pet_id,
+                p.name          AS pet_name,
+                p.species,
+                p.breed,
+                p.rg_animal_id,
+                p.status,
+                p.photo_url,
+                u.id            AS owner_id,
+                u.name          AS owner_name,
+                u.contact_phone,
+                u.neighborhood,
+                1 - (b.embedding <=> :embedding ::vector)  AS confidence,
+                NULL                                        AS distance_km
+            FROM biometrics b
+            JOIN pets p ON p.id = b.pet_id
+            JOIN users u ON u.id = p.owner_id
+            WHERE 1 - (b.embedding <=> :embedding ::vector) >= :min_confidence
+            ORDER BY confidence DESC
+            LIMIT :top_k
+    """
+    params = {
+        "embedding": embedding_str,
+        "min_confidence": min_confidence,
+        "top_k": top_k,
+    }
+
     if lat is not None and lng is not None:
         # TODO: suporte geográfico no identify depende de colunas/tabela de localização
         # Por ora, lat/lng recebidos são ignorados — busca global por similaridade coseno
-        query = text("""
-            SELECT
-                b.id            AS biometry_id,
-                b.pet_id,
-                p.name          AS pet_name,
-                p.species,
-                p.breed,
-                p.rg_animal_id,
-                p.status,
-                p.photo_url,
-                u.name          AS owner_name,
-                u.contact_phone,
-                u.neighborhood,
-                1 - (b.embedding <=> :embedding ::vector)  AS confidence,
-                NULL                                        AS distance_km
-            FROM biometrics b
-            JOIN pets p ON p.id = b.pet_id
-            JOIN users u ON u.id = p.owner_id
-            WHERE 1 - (b.embedding <=> :embedding ::vector) >= :min_confidence
-            ORDER BY confidence DESC
-            LIMIT :top_k
-        """)
-        params = {
-            "embedding": embedding_str,
-            "min_confidence": min_confidence,
-            "top_k": top_k,
-        }
+        query = text(_select)
     else:
-        query = text("""
-            SELECT
-                b.id            AS biometry_id,
-                b.pet_id,
-                p.name          AS pet_name,
-                p.species,
-                p.breed,
-                p.rg_animal_id,
-                p.status,
-                p.photo_url,
-                u.name          AS owner_name,
-                u.contact_phone,
-                u.neighborhood,
-                1 - (b.embedding <=> :embedding ::vector)  AS confidence,
-                NULL                                        AS distance_km
-            FROM biometrics b
-            JOIN pets p ON p.id = b.pet_id
-            JOIN users u ON u.id = p.owner_id
-            WHERE 1 - (b.embedding <=> :embedding ::vector) >= :min_confidence
-            ORDER BY confidence DESC
-            LIMIT :top_k
-        """)
-        params = {
-            "embedding": embedding_str,
-            "min_confidence": min_confidence,
-            "top_k": top_k,
-        }
+        query = text(_select)
 
     result = await db.execute(query, params)
     rows = result.mappings().all()
@@ -103,12 +80,16 @@ async def find_similar_pets(
             "status": row["status"],
             "photo_url": row["photo_url"],
         }
-        owner_info = None
         if row["status"] == "lost":
             owner_info = {
                 "name": row["owner_name"],
                 "contact_phone": row["contact_phone"],
                 "neighborhood": row["neighborhood"],
+            }
+        else:
+            owner_info = {
+                "id": str(row["owner_id"]),
+                "name": row["owner_name"],
             }
 
         matches.append({
