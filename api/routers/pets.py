@@ -82,7 +82,9 @@ async def list_my_pets(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    result = await db.execute(select(Pet).where(Pet.owner_id == UUID(user_id)))
+    result = await db.execute(
+        select(Pet).where(Pet.owner_id == UUID(user_id), Pet.source == "owner_registered")
+    )
     pets = result.scalars().all()
 
     # Batch check: quais pets têm pelo menos 1 biométrico registrado
@@ -153,6 +155,7 @@ def _serialize(pet: Pet, has_biometry: bool = False) -> dict:
         "rg_animal_id": pet.rg_animal_id,
         "status": pet.status,
         "photo_url": pet.photo_url,
+        "source": pet.source,
         "has_biometry": has_biometry,
         "created_at": pet.created_at.isoformat(),
     }

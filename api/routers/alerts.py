@@ -162,6 +162,7 @@ async def report_found_pet(
         species=body.species,
         owner_id=UUID(user_id),
         status="found",
+        source="found_report",
     )
     db.add(pet)
     await db.flush()

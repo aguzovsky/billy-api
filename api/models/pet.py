@@ -36,6 +36,7 @@ class Pet(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     rg_animal_id = Column(String(50))
     status = Column(String(20), default="home")  # 'home' | 'lost' | 'found'
+    source = Column(String(30), nullable=False, default="owner_registered")  # 'owner_registered' | 'found_report'
     photo_url = Column(Text)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
