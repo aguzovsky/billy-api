@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # Email (Resend)
     resend_api_key: str = ""
     resend_from_email: str = "Billy App <noreply@appbilly.com.br>"
+    api_base_url: str = "https://billy-api-production-5239.up.railway.app"
 
     # Anthropic — Billy AI
     anthropic_api_key: str = ""

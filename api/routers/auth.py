@@ -1,10 +1,12 @@
 import random
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,19 +54,30 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email já cadastrado")
 
+    verification_token = secrets.token_urlsafe(32)
     user = User(
         name=body.name,
         email=body.email,
         hashed_password=hash_password(body.password),
         contact_phone=body.contact_phone,
         neighborhood=body.neighborhood,
+        email_verified=False,
+        email_verification_token=verification_token,
+        email_verification_token_expires=datetime.now(timezone.utc) + timedelta(hours=24),
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
+    await _send_verification_email(user.email, user.name, verification_token)
+
     token = create_access_token(str(user.id))
-    return {"access_token": token, "token_type": "bearer", "user_id": str(user.id)}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": str(user.id),
+        "email_verification_required": True,
+    }
 
 
 @router.post("/login", summary="Login")
@@ -76,7 +89,12 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
     token = create_access_token(str(user.id))
-    return {"access_token": token, "token_type": "bearer", "user_id": str(user.id)}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": str(user.id),
+        "email_verified": user.email_verified,
+    }
 
 
 class UpdateProfileRequest(BaseModel):
@@ -100,6 +118,7 @@ async def get_me(
         "email": user.email,
         "contact_phone": user.contact_phone,
         "neighborhood": user.neighborhood,
+        "email_verified": user.email_verified,
     }
 
 
@@ -145,6 +164,120 @@ class ResetPasswordRequest(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         return _validate_password_strength(v)
+
+
+async def _send_verification_email(to_email: str, name: str, token: str) -> None:
+    if not settings.resend_api_key:
+        return
+    verify_url = f"{settings.api_base_url}/api/v1/auth/verify-email?token={token}"
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.resend_from_email,
+                "to": [to_email],
+                "subject": "Confirme seu e-mail — Billy",
+                "html": (
+                    f"<p>Olá, {name}!</p>"
+                    f"<p>Clique no botão abaixo para confirmar seu e-mail e ativar sua conta:</p>"
+                    f"<p><a href='{verify_url}' style='background:#E8714A;color:#fff;padding:12px 24px;"
+                    f"border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block'>"
+                    f"Confirmar e-mail</a></p>"
+                    f"<p>O link expira em <strong>24 horas</strong>.</p>"
+                    f"<p>Se você não criou uma conta no Billy, ignore este e-mail.</p>"
+                ),
+            },
+            timeout=10.0,
+        )
+
+
+@router.get("/verify-email", summary="Confirmar e-mail via link", response_class=HTMLResponse)
+async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(User).where(User.email_verification_token == token)
+    )
+    user = result.scalar_one_or_none()
+
+    if (
+        not user
+        or not user.email_verification_token_expires
+        or user.email_verification_token_expires < datetime.now(timezone.utc)
+    ):
+        return HTMLResponse(
+            content=_html_page(
+                "Link inválido ou expirado",
+                "Este link de verificação não é válido ou já expirou. "
+                "Abra o app Billy e solicite um novo e-mail de confirmação.",
+                success=False,
+            ),
+            status_code=400,
+        )
+
+    user.email_verified = True
+    user.email_verified_at = datetime.now(timezone.utc)
+    user.email_verification_token = None
+    user.email_verification_token_expires = None
+    await db.commit()
+
+    return HTMLResponse(
+        content=_html_page(
+            "E-mail confirmado!",
+            "Sua conta Billy está ativa. Você já pode fazer login no app.",
+            success=True,
+        )
+    )
+
+
+@router.post("/resend-verification", status_code=200, summary="Reenviar e-mail de verificação")
+async def resend_verification(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Sempre retorna 200 para não vazar estado
+    if not user.email_verified:
+        verification_token = secrets.token_urlsafe(32)
+        user.email_verification_token = verification_token
+        user.email_verification_token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        await db.commit()
+        await _send_verification_email(user.email, user.name, verification_token)
+
+    return {"message": "Se o e-mail ainda não foi confirmado, um novo link foi enviado."}
+
+
+def _html_page(title: str, message: str, success: bool) -> str:
+    color = "#E8714A" if success else "#E84A4A"
+    icon = "✓" if success else "✗"
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title} — Billy</title>
+  <style>
+    body {{ font-family: 'Nunito', sans-serif; background: #FAF8F5; display: flex;
+            align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
+    .card {{ background: #fff; border-radius: 16px; padding: 40px 32px; max-width: 400px;
+             text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
+    .icon {{ width: 64px; height: 64px; border-radius: 50%; background: {color};
+             color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 20px; }}
+    h1 {{ color: #1E1A17; font-size: 22px; margin: 0 0 12px; }}
+    p {{ color: #6B6460; font-size: 15px; line-height: 1.5; margin: 0; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">{icon}</div>
+    <h1>{title}</h1>
+    <p>{message}</p>
+  </div>
+</body>
+</html>"""
 
 
 async def _send_reset_email(to_email: str, code: str) -> None:

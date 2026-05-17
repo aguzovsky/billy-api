@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -20,6 +20,10 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     reset_token = Column(String(6))
     reset_token_expires = Column(DateTime(timezone=True))
+    email_verified = Column(Boolean, nullable=False, default=False)
+    email_verified_at = Column(DateTime(timezone=True))
+    email_verification_token = Column(String(64))
+    email_verification_token_expires = Column(DateTime(timezone=True))
 
     pets = relationship("Pet", back_populates="owner")
 
