@@ -62,22 +62,65 @@ async def search_nearby(
         if cached:
             return json.loads(cached)
 
-    included_types = _TYPE_MAP.get(type_filter, _TYPE_MAP["all"])
+    if type_filter == "groomer":
+        places = await _search_text(
+            text_query="banho e tosa pet",
+            lat=lat,
+            lng=lng,
+            radius_km=radius_km,
+            api_key=api_key,
+        )
+    else:
+        included_types = _TYPE_MAP.get(type_filter, _TYPE_MAP["all"])
+        body = {
+            "includedTypes": included_types,
+            "maxResultCount": 20,
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": lat, "longitude": lng},
+                    "radius": radius_km * 1000,
+                }
+            },
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{_PLACES_BASE}:searchNearby",
+                json=body,
+                headers={
+                    "X-Goog-Api-Key": api_key,
+                    "X-Goog-FieldMask": _LISTING_MASK,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        places = [_serialize_listing(p) for p in data.get("places", [])]
 
+    if redis:
+        await redis.setex(cache_key, 3600, json.dumps(places))
+
+    return places
+
+
+async def _search_text(
+    text_query: str,
+    lat: float,
+    lng: float,
+    radius_km: float,
+    api_key: str = "",
+) -> list[dict]:
     body = {
-        "includedTypes": included_types,
+        "textQuery": text_query,
         "maxResultCount": 20,
-        "locationRestriction": {
+        "locationBias": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
                 "radius": radius_km * 1000,
             }
         },
     }
-
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
-            f"{_PLACES_BASE}:searchNearby",
+            f"{_PLACES_BASE}:searchText",
             json=body,
             headers={
                 "X-Goog-Api-Key": api_key,
@@ -86,13 +129,7 @@ async def search_nearby(
         )
         resp.raise_for_status()
         data = resp.json()
-
-    places = [_serialize_listing(p) for p in data.get("places", [])]
-
-    if redis:
-        await redis.setex(cache_key, 3600, json.dumps(places))
-
-    return places
+    return [_serialize_listing(p) for p in data.get("places", [])]
 
 
 async def get_place_details(
