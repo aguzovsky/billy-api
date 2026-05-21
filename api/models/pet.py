@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -27,6 +27,11 @@ class User(Base):
     cpf = Column(String(14), unique=True, nullable=True)
     photo_url = Column(Text, nullable=True)
     is_verified = Column(Boolean, nullable=False, default=False)
+    gender = Column(String(20), nullable=True)
+    birth_date = Column(Date, nullable=True)
+    city = Column(String(100), nullable=True)
+    state = Column(String(2), nullable=True)
+    whatsapp = Column(String(20), nullable=True)
 
     pets = relationship("Pet", back_populates="owner")
 

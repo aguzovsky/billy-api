@@ -1,7 +1,7 @@
 import random
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
@@ -128,6 +128,11 @@ class UpdateProfileRequest(BaseModel):
     contact_phone: str | None = None
     neighborhood: str | None = None
     cpf: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None  # ISO format YYYY-MM-DD
+    city: str | None = None
+    state: str | None = None
+    whatsapp: str | None = None
 
     @field_validator("cpf")
     @classmethod
@@ -159,6 +164,11 @@ async def get_me(
         "cpf": user.cpf,
         "photo_url": user.photo_url,
         "is_verified": user.is_verified,
+        "gender": user.gender,
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "city": user.city,
+        "state": user.state,
+        "whatsapp": user.whatsapp,
     }
 
 
@@ -181,6 +191,19 @@ async def update_me(
         user.neighborhood = body.neighborhood
     if body.cpf is not None:
         user.cpf = body.cpf
+    if body.gender is not None:
+        user.gender = body.gender
+    if body.birth_date is not None:
+        try:
+            user.birth_date = date.fromisoformat(body.birth_date)
+        except ValueError:
+            pass
+    if body.city is not None:
+        user.city = body.city
+    if body.state is not None:
+        user.state = body.state
+    if body.whatsapp is not None:
+        user.whatsapp = body.whatsapp
 
     await db.commit()
     await db.refresh(user)
@@ -193,6 +216,11 @@ async def update_me(
         "cpf": user.cpf,
         "photo_url": user.photo_url,
         "is_verified": user.is_verified,
+        "gender": user.gender,
+        "birth_date": user.birth_date.isoformat() if user.birth_date else None,
+        "city": user.city,
+        "state": user.state,
+        "whatsapp": user.whatsapp,
     }
 
 
