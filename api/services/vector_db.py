@@ -44,6 +44,7 @@ async def find_similar_pets(
                 u.name          AS owner_name,
                 u.contact_phone,
                 u.neighborhood,
+                u.is_verified   AS owner_is_verified,
                 1 - (b.embedding <=> :embedding ::vector)  AS confidence,
                 NULL                                        AS distance_km
             FROM biometrics b
@@ -85,11 +86,13 @@ async def find_similar_pets(
                 "name": row["owner_name"],
                 "contact_phone": row["contact_phone"],
                 "neighborhood": row["neighborhood"],
+                "is_verified": bool(row["owner_is_verified"]),
             }
         else:
             owner_info = {
                 "id": str(row["owner_id"]),
                 "name": row["owner_name"],
+                "is_verified": bool(row["owner_is_verified"]),
             }
 
         matches.append({

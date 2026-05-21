@@ -24,6 +24,9 @@ class User(Base):
     email_verified_at = Column(DateTime(timezone=True))
     email_verification_token = Column(String(64))
     email_verification_token_expires = Column(DateTime(timezone=True))
+    cpf = Column(String(14), unique=True, nullable=True)
+    photo_url = Column(Text, nullable=True)
+    is_verified = Column(Boolean, nullable=False, default=False)
 
     pets = relationship("Pet", back_populates="owner")
 

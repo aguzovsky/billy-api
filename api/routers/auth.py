@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import create_access_token, get_current_user_id, hash_password, verify_password
 from api.models.pet import User
+from api.services import storage
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -126,6 +127,17 @@ class UpdateProfileRequest(BaseModel):
     name: str | None = None
     contact_phone: str | None = None
     neighborhood: str | None = None
+    cpf: str | None = None
+
+    @field_validator("cpf")
+    @classmethod
+    def cpf_format(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        digits = re.sub(r'\D', '', v)
+        if len(digits) != 11:
+            raise ValueError("CPF deve ter 11 dígitos.")
+        return digits
 
 
 @router.get("/me", summary="Meu perfil")
@@ -144,6 +156,9 @@ async def get_me(
         "contact_phone": user.contact_phone,
         "neighborhood": user.neighborhood,
         "email_verified": user.email_verified,
+        "cpf": user.cpf,
+        "photo_url": user.photo_url,
+        "is_verified": user.is_verified,
     }
 
 
@@ -164,6 +179,8 @@ async def update_me(
         user.contact_phone = body.contact_phone
     if body.neighborhood is not None:
         user.neighborhood = body.neighborhood
+    if body.cpf is not None:
+        user.cpf = body.cpf
 
     await db.commit()
     await db.refresh(user)
@@ -173,7 +190,32 @@ async def update_me(
         "email": user.email,
         "contact_phone": user.contact_phone,
         "neighborhood": user.neighborhood,
+        "cpf": user.cpf,
+        "photo_url": user.photo_url,
+        "is_verified": user.is_verified,
     }
+
+
+@router.patch("/me/photo", summary="Upload foto de perfil")
+async def update_me_photo(
+    photo: UploadFile = File(..., description="Foto de perfil (JPG/PNG)"),
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    image_bytes = await photo.read()
+    photo_url = await storage.upload_user_photo(image_bytes, photo.content_type or "image/jpeg")
+
+    if photo_url:
+        user.photo_url = photo_url
+        await db.commit()
+        await db.refresh(user)
+
+    return {"photo_url": user.photo_url}
 
 
 class ForgotPasswordRequest(BaseModel):
