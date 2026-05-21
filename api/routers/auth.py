@@ -97,6 +97,31 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     }
 
 
+class BiometricLoginRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/biometric-login", summary="Login biométrico")
+async def biometric_login(body: BiometricLoginRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Emite token para usuário autenticado via biometria do dispositivo.
+    A prova de identidade é a biometria local (Face ID / digital) — o servidor
+    confia na asserção do cliente, que só chama este endpoint após authenticate()=true.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+
+    token = create_access_token(str(user.id))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user_id": str(user.id),
+        "email_verified": user.email_verified,
+    }
+
+
 class UpdateProfileRequest(BaseModel):
     name: str | None = None
     contact_phone: str | None = None
