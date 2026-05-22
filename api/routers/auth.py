@@ -37,6 +37,11 @@ class RegisterRequest(BaseModel):
     password: str
     contact_phone: str | None = None
     neighborhood: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None  # ISO format YYYY-MM-DD
+    city: str | None = None
+    state: str | None = None
+    whatsapp: str | None = None
 
     @field_validator("password")
     @classmethod
@@ -62,6 +67,11 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         hashed_password=hash_password(body.password),
         contact_phone=body.contact_phone,
         neighborhood=body.neighborhood,
+        gender=body.gender,
+        birth_date=date.fromisoformat(body.birth_date) if body.birth_date else None,
+        city=body.city,
+        state=body.state,
+        whatsapp=body.whatsapp,
         email_verified=False,
         email_verification_token=verification_token,
         email_verification_token_expires=datetime.now(timezone.utc) + timedelta(hours=24),
