@@ -8,7 +8,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from api.routers import auth, alerts, biometry, pets, guardians, services, ai
+from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos
+from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +51,7 @@ app.include_router(alerts.router, prefix=API_PREFIX)
 app.include_router(guardians.router, prefix=API_PREFIX)
 app.include_router(services.router, prefix=API_PREFIX)
 app.include_router(ai.router, prefix=API_PREFIX)
+app.include_router(pet_photos.router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["infra"])
