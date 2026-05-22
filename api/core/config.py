@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = "changeme"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    access_token_expire_minutes: int = 1  # TEMP: reduzido para testar bug biometria
 
     # Model
     model_weights_dir: str = "./weights"
