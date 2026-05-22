@@ -212,7 +212,7 @@ async function send(){{
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.textContent='Enviando...';
   try{{
-    const r=await fetch('/api/v1/pets/{pet_id}/found-contact',{{
+    const r=await fetch('/api/v1/pets/{pet.id}/found-contact',{{
       method:'POST',headers:{{'Content-Type':'application/json'}},
       body:JSON.stringify({{finder_name:fn,finder_phone:fp,location_text:fl}})
     }});
