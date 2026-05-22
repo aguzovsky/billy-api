@@ -1,15 +1,22 @@
+import html as _html
 import logging
 from contextlib import asynccontextmanager
+from uuid import UUID
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos
+from api.core.database import get_db
+from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
+from api.models.pet import User
 from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
+from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +59,170 @@ app.include_router(guardians.router, prefix=API_PREFIX)
 app.include_router(services.router, prefix=API_PREFIX)
 app.include_router(ai.router, prefix=API_PREFIX)
 app.include_router(pet_photos.router, prefix=API_PREFIX)
+
+
+@app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)
+async def pet_public_page(pet_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        uid = UUID(pet_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    result = await db.execute(select(Pet).where(Pet.id == uid))
+    pet = result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet not found")
+
+    owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+    owner = owner_result.scalar_one_or_none()
+
+    return HTMLResponse(_render_pet_page(pet, owner))
+
+
+def _render_pet_page(pet: Pet, owner) -> str:
+    safe = _html.escape
+    name = safe(pet.name or "")
+    breed = safe(pet.breed or "")
+    species_label = {"dog": "Cachorro", "cat": "Gato"}.get(pet.species or "", safe(pet.species or ""))
+    breed_part = f" · {breed}" if breed else ""
+    owner_name = safe(owner.name if owner else "Tutor")
+    is_verified = owner.is_verified if owner else False
+
+    status_map = {
+        "home": ("Em casa", "status-home"),
+        "lost": ("Perdido 🚨", "status-lost"),
+        "found": ("Encontrado", "status-found"),
+    }
+    status_label, status_class = status_map.get(pet.status or "home", ("Desconhecido", "status-home"))
+
+    if pet.photo_url:
+        photo_html = f'<img src="{safe(pet.photo_url)}" alt="{name}" loading="lazy">'
+    else:
+        emoji = "🐕" if pet.species == "dog" else "🐈" if pet.species == "cat" else "🐾"
+        photo_html = f'<div class="hero-fallback">{emoji}</div>'
+
+    verified_html = '<span class="verified-badge">Verificado ✓</span>' if is_verified else ""
+
+    id_rows = []
+    if pet.rg_animal_id:
+        id_rows.append(f'<div class="id-row"><span class="id-label">RG Animal</span><span class="id-value">#{safe(pet.rg_animal_id)}</span></div>')
+    if pet.sinpatinhas_id:
+        id_rows.append(f'<div class="id-row"><span class="id-label">SinPatinhas</span><span class="id-value">#{safe(pet.sinpatinhas_id)}</span></div>')
+    if pet.microchip_id:
+        id_rows.append(f'<div class="id-row"><span class="id-label">Microchip</span><span class="id-value">#{safe(pet.microchip_id)}</span></div>')
+
+    if id_rows:
+        ids_html = '<div class="section-title">Identificação</div>' + "".join(id_rows)
+    else:
+        ids_html = '<div class="section-title">Identificação</div><p class="id-empty-msg">Nenhum número registrado ainda.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{name} — Billy</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#FAF8F5;color:#3D2314;min-height:100vh}}
+    .container{{max-width:480px;margin:0 auto}}
+    .billy-bar{{background:#C98A4B;padding:12px 20px;display:flex;align-items:center;gap:8px}}
+    .billy-bar span{{color:white;font-size:16px;font-weight:800}}
+    .hero{{width:100%;height:260px;background:#FBF0E4;overflow:hidden}}
+    .hero img{{width:100%;height:100%;object-fit:cover}}
+    .hero-fallback{{display:flex;align-items:center;justify-content:center;height:100%;font-size:88px}}
+    .content{{padding:20px}}
+    .name-row{{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}}
+    .pet-name{{font-size:26px;font-weight:800;color:#3D2314;line-height:1.15}}
+    .status-badge{{padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0;margin-top:4px}}
+    .status-home{{background:rgba(201,138,75,.12);color:#C98A4B;border:1px solid rgba(201,138,75,.25)}}
+    .status-lost{{background:rgba(232,74,74,.12);color:#E84A4A;border:1px solid rgba(232,74,74,.25)}}
+    .status-found{{background:rgba(34,197,94,.12);color:#22C55E;border:1px solid rgba(34,197,94,.25)}}
+    .pet-meta{{font-size:15px;color:#8B6F5E;margin-top:4px}}
+    .owner-row{{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}}
+    .owner-text{{font-size:14px;color:#8B6F5E}}
+    .verified-badge{{background:rgba(201,138,75,.12);color:#C98A4B;border:1px solid rgba(201,138,75,.25);padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700}}
+    .divider{{height:1px;background:#EDE5DB;margin:18px 0}}
+    .section-title{{font-size:12px;font-weight:700;color:#8B6F5E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}}
+    .id-row{{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #EDE5DB}}
+    .id-row:last-of-type{{border-bottom:none}}
+    .id-label{{font-size:13px;color:#8B6F5E;width:96px;flex-shrink:0}}
+    .id-value{{font-size:14px;font-weight:700;color:#3D2314}}
+    .id-empty-msg{{font-size:14px;color:#C4B0A0}}
+    .found-card{{background:white;border:1px solid #EDE5DB;border-radius:16px;padding:20px}}
+    .found-title{{font-size:18px;font-weight:800;color:#3D2314;margin-bottom:4px}}
+    .found-sub{{font-size:14px;color:#8B6F5E;margin-bottom:18px}}
+    .field{{margin-bottom:14px}}
+    .field label{{display:block;font-size:13px;font-weight:700;color:#8B6F5E;margin-bottom:6px}}
+    .field input,.field textarea{{width:100%;padding:12px 14px;border:1.5px solid #EDE5DB;border-radius:10px;font-size:15px;color:#3D2314;font-family:inherit;background:#FAF8F5;outline:none;transition:border-color .15s}}
+    .field input:focus,.field textarea:focus{{border-color:#C98A4B}}
+    .field textarea{{resize:none;height:80px}}
+    .btn-submit{{width:100%;padding:14px;background:#C98A4B;color:white;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .15s}}
+    .btn-submit:hover{{opacity:.88}}
+    .btn-submit:disabled{{opacity:.55;cursor:not-allowed}}
+    .success{{display:none;text-align:center;padding:20px 0}}
+    .success-icon{{font-size:52px;margin-bottom:12px}}
+    .success-title{{font-size:20px;font-weight:800;color:#3D2314;margin-bottom:8px}}
+    .success-text{{font-size:15px;color:#8B6F5E;line-height:1.55}}
+    .footer{{text-align:center;padding:24px 20px 32px}}
+    .footer a{{color:#C98A4B;text-decoration:none;font-size:14px;font-weight:700}}
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="billy-bar"><span>🐾 billy</span></div>
+  <div class="hero">{photo_html}</div>
+  <div class="content">
+    <div class="name-row">
+      <div class="pet-name">{name}</div>
+      <div class="status-badge {status_class}">{status_label}</div>
+    </div>
+    <div class="pet-meta">{species_label}{breed_part}</div>
+    <div class="owner-row">
+      <span class="owner-text">Tutor: {owner_name}</span>
+      {verified_html}
+    </div>
+    <div class="divider"></div>
+    {ids_html}
+    <div class="divider"></div>
+    <div class="found-card">
+      <div id="form-wrap">
+        <div class="found-title">Encontrei este pet 🐾</div>
+        <div class="found-sub">Preencha seus dados para avisar o tutor.</div>
+        <div class="field"><label>Seu nome</label><input type="text" id="fn" placeholder="João Silva"></div>
+        <div class="field"><label>Telefone / WhatsApp</label><input type="tel" id="fp" placeholder="(11) 99999-9999"></div>
+        <div class="field"><label>Onde encontrou?</label><textarea id="fl" placeholder="Rua das Flores, 123 — próximo ao parque"></textarea></div>
+        <button class="btn-submit" id="btn" onclick="send()">Avisar o tutor</button>
+      </div>
+      <div class="success" id="ok">
+        <div class="success-icon">🐾</div>
+        <div class="success-title">Obrigado!</div>
+        <div class="success-text">O tutor foi avisado.<br>Por favor, fique com o pet e aguarde o contato.</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><a href="https://appbilly.com.br">Abrir no app Billy</a></div>
+</div>
+<script>
+async function send(){{
+  const fn=document.getElementById('fn').value.trim();
+  const fp=document.getElementById('fp').value.trim();
+  const fl=document.getElementById('fl').value.trim();
+  if(!fn||!fp||!fl){{alert('Preencha todos os campos.');return;}}
+  const btn=document.getElementById('btn');
+  btn.disabled=true;btn.textContent='Enviando...';
+  try{{
+    const r=await fetch('/api/v1/pets/{pet_id}/found-contact',{{
+      method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{finder_name:fn,finder_phone:fp,location_text:fl}})
+    }});
+    if(r.ok){{document.getElementById('form-wrap').style.display='none';document.getElementById('ok').style.display='block';}}
+    else{{btn.disabled=false;btn.textContent='Avisar o tutor';alert('Erro ao enviar. Tente novamente.');}}
+  }}catch(e){{btn.disabled=false;btn.textContent='Avisar o tutor';alert('Erro de conexão.');}}
+}}
+</script>
+</body>
+</html>"""
 
 
 @app.get("/health", tags=["infra"])
