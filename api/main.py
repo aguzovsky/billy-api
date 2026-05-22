@@ -87,13 +87,7 @@ def _render_pet_page(pet: Pet, owner) -> str:
     breed_part = f" · {breed}" if breed else ""
     owner_name = safe(owner.name if owner else "Tutor")
     is_verified = owner.is_verified if owner else False
-
-    status_map = {
-        "home": ("Em casa", "status-home"),
-        "lost": ("Perdido 🚨", "status-lost"),
-        "found": ("Encontrado", "status-found"),
-    }
-    status_label, status_class = status_map.get(pet.status or "home", ("Desconhecido", "status-home"))
+    is_lost = (pet.status or "home") == "lost"
 
     if pet.photo_url:
         photo_html = f'<img src="{safe(pet.photo_url)}" alt="{name}" loading="lazy">'
@@ -102,6 +96,11 @@ def _render_pet_page(pet: Pet, owner) -> str:
         photo_html = f'<div class="hero-fallback">{emoji}</div>'
 
     verified_html = '<span class="verified-badge">Verificado ✓</span>' if is_verified else ""
+    status_badge_html = '<div class="lost-badge">🚨 PET PERDIDO</div>' if is_lost else ""
+    urgency_html = (
+        '<div class="urgency-banner"><p>Este pet está perdido. O tutor está esperando notícias.'
+        ' Por favor preencha o formulário abaixo.</p></div>'
+    ) if is_lost else ""
 
     id_rows = []
     if pet.rg_animal_id:
@@ -111,10 +110,9 @@ def _render_pet_page(pet: Pet, owner) -> str:
     if pet.microchip_id:
         id_rows.append(f'<div class="id-row"><span class="id-label">Microchip</span><span class="id-value">#{safe(pet.microchip_id)}</span></div>')
 
-    if id_rows:
-        ids_html = '<div class="section-title">Identificação</div>' + "".join(id_rows)
-    else:
-        ids_html = '<div class="section-title">Identificação</div><p class="id-empty-msg">Nenhum número registrado ainda.</p>'
+    ids_section_html = (
+        '<div class="divider"></div><div class="section-title">Identificação</div>' + "".join(id_rows)
+    ) if id_rows else ""
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -126,72 +124,82 @@ def _render_pet_page(pet: Pet, owner) -> str:
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#FAF8F5;color:#3D2314;min-height:100vh}}
     .container{{max-width:480px;margin:0 auto}}
-    .billy-bar{{background:#C98A4B;padding:12px 20px;display:flex;align-items:center;gap:8px}}
-    .billy-bar span{{color:white;font-size:16px;font-weight:800}}
-    .hero{{width:100%;height:260px;background:#FBF0E4;overflow:hidden}}
-    .hero img{{width:100%;height:100%;object-fit:cover}}
-    .hero-fallback{{display:flex;align-items:center;justify-content:center;height:100%;font-size:88px}}
-    .content{{padding:20px}}
-    .name-row{{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}}
-    .pet-name{{font-size:26px;font-weight:800;color:#3D2314;line-height:1.15}}
-    .status-badge{{padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0;margin-top:4px}}
-    .status-home{{background:rgba(201,138,75,.12);color:#C98A4B;border:1px solid rgba(201,138,75,.25)}}
-    .status-lost{{background:rgba(232,74,74,.12);color:#E84A4A;border:1px solid rgba(232,74,74,.25)}}
-    .status-found{{background:rgba(34,197,94,.12);color:#22C55E;border:1px solid rgba(34,197,94,.25)}}
-    .pet-meta{{font-size:15px;color:#8B6F5E;margin-top:4px}}
-    .owner-row{{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}}
+    .billy-bar{{background:#C98A4B;padding:14px 24px;display:flex;align-items:center;gap:8px}}
+    .billy-bar span{{color:white;font-size:17px;font-weight:800;letter-spacing:-.3px}}
+    .hero{{width:100%;height:280px;background:#FBF0E4;overflow:hidden;position:relative}}
+    .hero img{{width:100%;height:100%;object-fit:cover;object-position:center top}}
+    .hero-fallback{{display:flex;align-items:center;justify-content:center;height:100%;font-size:96px}}
+    .lost-badge{{position:absolute;bottom:0;left:0;right:0;background:rgba(232,74,74,.92);color:white;text-align:center;padding:12px 16px;font-size:18px;font-weight:800;letter-spacing:.3px}}
+    .content{{padding:24px}}
+    .pet-name{{font-size:28px;font-weight:800;color:#3D2314;line-height:1.15;margin-bottom:4px}}
+    .pet-meta{{font-size:15px;color:#8B6F5E;margin-bottom:10px}}
+    .owner-row{{display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
     .owner-text{{font-size:14px;color:#8B6F5E}}
-    .verified-badge{{background:rgba(201,138,75,.12);color:#C98A4B;border:1px solid rgba(201,138,75,.25);padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700}}
-    .divider{{height:1px;background:#EDE5DB;margin:18px 0}}
-    .section-title{{font-size:12px;font-weight:700;color:#8B6F5E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}}
-    .id-row{{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #EDE5DB}}
+    .verified-badge{{background:rgba(201,138,75,.12);color:#C98A4B;border:1px solid rgba(201,138,75,.25);padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700}}
+    .divider{{height:1px;background:#EDE5DB;margin:20px 0}}
+    .section-title{{font-size:11px;font-weight:700;color:#8B6F5E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px}}
+    .id-row{{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid #EDE5DB}}
     .id-row:last-of-type{{border-bottom:none}}
-    .id-label{{font-size:13px;color:#8B6F5E;width:96px;flex-shrink:0}}
+    .id-label{{font-size:13px;color:#8B6F5E;width:100px;flex-shrink:0}}
     .id-value{{font-size:14px;font-weight:700;color:#3D2314}}
-    .id-empty-msg{{font-size:14px;color:#C4B0A0}}
-    .found-card{{background:white;border:1px solid #EDE5DB;border-radius:16px;padding:20px}}
-    .found-title{{font-size:18px;font-weight:800;color:#3D2314;margin-bottom:4px}}
-    .found-sub{{font-size:14px;color:#8B6F5E;margin-bottom:18px}}
-    .field{{margin-bottom:14px}}
-    .field label{{display:block;font-size:13px;font-weight:700;color:#8B6F5E;margin-bottom:6px}}
-    .field input,.field textarea{{width:100%;padding:12px 14px;border:1.5px solid #EDE5DB;border-radius:10px;font-size:15px;color:#3D2314;font-family:inherit;background:#FAF8F5;outline:none;transition:border-color .15s}}
+    .urgency-banner{{background:#FEE2E2;border:1.5px solid #FECACA;border-radius:12px;padding:16px 18px;margin-bottom:20px}}
+    .urgency-banner p{{font-size:14px;font-weight:600;color:#B91C1C;line-height:1.5}}
+    .found-card{{background:white;border:1px solid #EDE5DB;border-radius:16px;padding:24px}}
+    .found-title{{font-size:19px;font-weight:800;color:#3D2314;margin-bottom:6px}}
+    .found-sub{{font-size:14px;color:#8B6F5E;margin-bottom:22px;line-height:1.45}}
+    .field{{margin-bottom:18px}}
+    .field label{{display:block;font-size:12px;font-weight:700;color:#8B6F5E;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}}
+    .field input,.field textarea{{width:100%;padding:13px 15px;border:1.5px solid #EDE5DB;border-radius:10px;font-size:15px;color:#3D2314;font-family:inherit;background:#FAF8F5;outline:none;transition:border-color .15s}}
     .field input:focus,.field textarea:focus{{border-color:#C98A4B}}
-    .field textarea{{resize:none;height:80px}}
-    .btn-submit{{width:100%;padding:14px;background:#C98A4B;color:white;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .15s}}
+    .field textarea{{resize:none;height:88px}}
+    .stay-group{{display:flex;gap:10px}}
+    .stay-btn{{flex:1;padding:12px;border:1.5px solid #EDE5DB;border-radius:10px;font-size:14px;font-weight:700;color:#8B6F5E;background:#FAF8F5;cursor:pointer;font-family:inherit;transition:all .15s;text-align:center}}
+    .stay-btn.selected{{border-color:#C98A4B;background:rgba(201,138,75,.08);color:#C98A4B}}
+    .btn-submit{{width:100%;padding:15px;background:#C98A4B;color:white;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit;transition:opacity .15s;margin-top:8px}}
     .btn-submit:hover{{opacity:.88}}
-    .btn-submit:disabled{{opacity:.55;cursor:not-allowed}}
-    .success{{display:none;text-align:center;padding:20px 0}}
-    .success-icon{{font-size:52px;margin-bottom:12px}}
-    .success-title{{font-size:20px;font-weight:800;color:#3D2314;margin-bottom:8px}}
-    .success-text{{font-size:15px;color:#8B6F5E;line-height:1.55}}
-    .footer{{text-align:center;padding:24px 20px 32px}}
-    .footer a{{color:#C98A4B;text-decoration:none;font-size:14px;font-weight:700}}
+    .btn-submit:disabled{{opacity:.5;cursor:not-allowed}}
+    .success{{display:none;text-align:center;padding:24px 0}}
+    .success-icon{{font-size:56px;margin-bottom:14px}}
+    .success-title{{font-size:22px;font-weight:800;color:#3D2314;margin-bottom:10px}}
+    .success-text{{font-size:15px;color:#8B6F5E;line-height:1.6}}
+    .footer{{padding:28px 24px 40px;text-align:center}}
+    .footer-btn{{display:block;background:#3D2314;color:white;text-decoration:none;padding:16px 24px;border-radius:14px}}
+    .footer-icon{{font-size:20px;display:block;margin-bottom:4px}}
+    .footer-main{{display:block;font-size:15px;font-weight:800}}
+    .footer-sub{{display:block;font-size:12px;opacity:.6;margin-top:3px;font-weight:400}}
   </style>
 </head>
 <body>
 <div class="container">
   <div class="billy-bar"><span>🐾 billy</span></div>
-  <div class="hero">{photo_html}</div>
+  <div class="hero">
+    {photo_html}
+    {status_badge_html}
+  </div>
   <div class="content">
-    <div class="name-row">
-      <div class="pet-name">{name}</div>
-      <div class="status-badge {status_class}">{status_label}</div>
-    </div>
+    <div class="pet-name">{name}</div>
     <div class="pet-meta">{species_label}{breed_part}</div>
     <div class="owner-row">
       <span class="owner-text">Tutor: {owner_name}</span>
       {verified_html}
     </div>
+    {ids_section_html}
     <div class="divider"></div>
-    {ids_html}
-    <div class="divider"></div>
+    {urgency_html}
     <div class="found-card">
       <div id="form-wrap">
         <div class="found-title">Encontrei este pet 🐾</div>
-        <div class="found-sub">Preencha seus dados para avisar o tutor.</div>
+        <div class="found-sub">Preencha seus dados para que o tutor possa entrar em contato com você.</div>
         <div class="field"><label>Seu nome</label><input type="text" id="fn" placeholder="João Silva"></div>
         <div class="field"><label>Telefone / WhatsApp</label><input type="tel" id="fp" placeholder="(11) 99999-9999"></div>
         <div class="field"><label>Onde encontrou?</label><textarea id="fl" placeholder="Rua das Flores, 123 — próximo ao parque"></textarea></div>
+        <div class="field">
+          <label>Você pode ficar com o pet? <span style="font-weight:400;text-transform:none;font-size:11px">(opcional)</span></label>
+          <div class="stay-group">
+            <button class="stay-btn" id="stay-yes" onclick="selectStay('yes')">✔ Sim, posso ficar</button>
+            <button class="stay-btn" id="stay-no" onclick="selectStay('no')">✗ Não consigo ficar</button>
+          </div>
+        </div>
         <button class="btn-submit" id="btn" onclick="send()">Avisar o tutor</button>
       </div>
       <div class="success" id="ok">
@@ -201,20 +209,32 @@ def _render_pet_page(pet: Pet, owner) -> str:
       </div>
     </div>
   </div>
-  <div class="footer"><a href="https://appbilly.com.br">Abrir no app Billy</a></div>
+  <div class="footer">
+    <a class="footer-btn" href="https://appbilly.com.br">
+      <span class="footer-icon">⬇</span>
+      <span class="footer-main">Baixar o app Billy</span>
+      <span class="footer-sub">Identifique pets perdidos pela biometria nasal</span>
+    </a>
+  </div>
 </div>
 <script>
+let stayVal=null;
+function selectStay(v){{
+  stayVal=v;
+  document.getElementById('stay-yes').classList.toggle('selected',v==='yes');
+  document.getElementById('stay-no').classList.toggle('selected',v==='no');
+}}
 async function send(){{
   const fn=document.getElementById('fn').value.trim();
   const fp=document.getElementById('fp').value.trim();
   const fl=document.getElementById('fl').value.trim();
-  if(!fn||!fp||!fl){{alert('Preencha todos os campos.');return;}}
+  if(!fn||!fp||!fl){{alert('Preencha todos os campos obrigatórios.');return;}}
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.textContent='Enviando...';
   try{{
     const r=await fetch('/api/v1/pets/{pet.id}/found-contact',{{
       method:'POST',headers:{{'Content-Type':'application/json'}},
-      body:JSON.stringify({{finder_name:fn,finder_phone:fp,location_text:fl}})
+      body:JSON.stringify({{finder_name:fn,finder_phone:fp,location_text:fl,can_stay:stayVal}})
     }});
     if(r.ok){{document.getElementById('form-wrap').style.display='none';document.getElementById('ok').style.display='block';}}
     else{{btn.disabled=false;btn.textContent='Avisar o tutor';alert('Erro ao enviar. Tente novamente.');}}
