@@ -60,6 +60,7 @@ class Pet(Base):
     guardians = relationship("PetGuardian", back_populates="pet", cascade="all, delete-orphan")
     photos = relationship("PetPhoto", back_populates="pet", cascade="all, delete-orphan")
     found_contacts = relationship("PetFoundContact", back_populates="pet", cascade="all, delete-orphan")
+    health_events = relationship("HealthEvent", back_populates="pet", cascade="all, delete-orphan")
 
 
 class PetFoundContact(Base):

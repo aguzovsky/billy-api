@@ -16,7 +16,8 @@ from api.core.database import get_db
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
 from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
-from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos
+from api.models import health as _health_model  # noqa: F401 — registers HealthEvent with Base
+from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +60,7 @@ app.include_router(guardians.router, prefix=API_PREFIX)
 app.include_router(services.router, prefix=API_PREFIX)
 app.include_router(ai.router, prefix=API_PREFIX)
 app.include_router(pet_photos.router, prefix=API_PREFIX)
+app.include_router(health.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)
