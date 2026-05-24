@@ -424,6 +424,36 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     return {"message": "Se o e-mail estiver cadastrado, você receberá um código em instantes."}
 
 
+@router.delete("/me", status_code=204, summary="Excluir conta (anonimização)")
+async def delete_me(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.name = "Usuário removido"
+    user.email = f"deleted_{user_id}@deleted.com"
+    user.hashed_password = ""
+    user.contact_phone = None
+    user.neighborhood = None
+    user.cpf = None
+    user.photo_url = None
+    user.whatsapp = None
+    user.city = None
+    user.state = None
+    user.gender = None
+    user.birth_date = None
+    user.email_verified = False
+    user.email_verification_token = None
+    user.email_verification_token_expires = None
+    user.reset_token = None
+    user.reset_token_expires = None
+    await db.commit()
+
+
 @router.post("/reset-password", status_code=200, summary="Redefinir senha com código")
 async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
