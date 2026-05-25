@@ -141,7 +141,7 @@ async def identify_pet(
     embedding = reid.extract_embedding(image_bytes)
 
     stub_mode = not reid.modal_url
-    model_id = "stub_seed42" if stub_mode else "modal_resnet50_imagenet"
+    model_id = "stub_seed42" if stub_mode else "modal_resnest101_petreid"
 
     results = await vector_db.find_similar_pets(
         db=db,
