@@ -125,6 +125,114 @@ def extract_embedding(body: dict) -> dict:
     return {"embedding": embedding, "dims": len(embedding)}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ResNeSt-50 — endpoint "fast" (cold start ~2x mais rápido que resnest101)
+# Mesmos pesos Pet-ReID-IMAG, mesma saída 2048-dim, mesmo preprocessing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.cls(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+class PetReIDModelFast:
+    @modal.enter()
+    def load_model(self):
+        import torch
+        import torch.nn as nn
+        import boto3
+        from resnest.torch import resnest50
+        import torchvision.transforms as T
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print("[Billy-ReID-Fast] Modelo: ResNeSt-50 Pet-ReID-IMAG")
+        print(f"[Billy-ReID-Fast] Device: {self.device}")
+
+        weights_path = "/tmp/model_final.pth"
+        if not os.path.exists(weights_path):
+            print("[Billy-ReID-Fast] Baixando pesos do S3...")
+            s3 = boto3.client(
+                "s3",
+                aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                region_name=os.environ.get("AWS_S3_REGION", "us-east-2"),
+            )
+            s3.download_file("appbilly-photos", "models/model_final.pth", weights_path)
+            print("[Billy-ReID-Fast] Pesos baixados.")
+
+        backbone = resnest50(pretrained=False)
+        self.model = nn.Sequential(*list(backbone.children())[:-1])
+
+        ckpt = torch.load(weights_path, map_location=self.device)
+        state_dict = ckpt["model"]
+
+        backbone_state = {
+            k.replace("backbone.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("backbone.")
+        }
+        self.model.load_state_dict(backbone_state, strict=False)
+        self.model.eval().to(self.device)
+
+        self.transform = T.Compose([
+            T.Resize(256),
+            T.CenterCrop(224),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225]),
+        ])
+        print("[Billy-ReID-Fast] Modelo ResNeSt-50 com pesos Pet-ReID-IMAG pronto.")
+
+    @modal.method()
+    def embed(self, image_b64: str) -> list[float]:
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        img_bytes = base64.b64decode(image_b64)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        tensor = self.transform(img).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            feat = self.model(tensor)
+        vec = feat.squeeze().cpu().numpy()
+
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+
+        return vec.tolist()
+
+
+@app.function(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+@modal.fastapi_endpoint(method="POST")
+def extract_embedding_fast(body: dict) -> dict:
+    image_b64 = body.get("image_b64", "")
+    if not image_b64:
+        return {"error": "image_b64 is required"}, 400
+
+    model = PetReIDModelFast()
+    embedding = model.embed.remote(image_b64)
+    return {"embedding": embedding, "dims": len(embedding)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Warmup — acorda o container Fast sem GPU obrigatória no handler.
+# Dispara um embed com imagem dummy para inicializar o container GPU.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.function(scaledown_window=60)
+@modal.fastapi_endpoint(method="GET")
+def extract_embedding_warmup() -> dict:
+    import numpy as np
+    from PIL import Image as _Image
+
+    arr = (np.zeros((64, 64, 3))).astype("uint8")
+    img = _Image.fromarray(arr, "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    dummy_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    PetReIDModelFast().embed.remote(dummy_b64)
+    return {"status": "warm"}
+
+
 @app.local_entrypoint()
 def test():
     from PIL import Image

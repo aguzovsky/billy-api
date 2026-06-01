@@ -182,3 +182,14 @@ async def identify_pet(
         "results": results,
         "processing_ms": elapsed_ms,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /warmup
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/warmup", summary="Ping para manter Modal aquecido")
+async def warmup_biometry():
+    """Sem autenticação — chamado pelo cliente para acordar o container GPU."""
+    await reid_module.get_reid_service().warmup()
+    return {"status": "ok"}

@@ -1,7 +1,11 @@
+import asyncio
 import html as _html
 import logging
+import os
 from contextlib import asynccontextmanager
 from uuid import UUID
+
+import sentry_sdk
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,12 +17,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.database import get_db
+from api.services import reid_service as _reid
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
 from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
 from api.models import health as _health_model  # noqa: F401 — registers HealthEvent with Base
 from api.models import consent as _consent_model  # noqa: F401 — registers UserConsent with Base
-from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents
+from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify
+
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", "https://80417d985fc75686827188afff05bce0@o4511469145423873.ingest.us.sentry.io/4511469149945856"),
+    environment=os.getenv("ENVIRONMENT", "production"),
+    traces_sample_rate=0.1,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,9 +39,19 @@ logging.basicConfig(
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
+async def _keep_modal_warm():
+    while True:
+        await asyncio.sleep(240)  # 4 minutos
+        try:
+            await _reid.get_reid_service().warmup()
+            print("[WARMUP] Modal kept warm")
+        except Exception as e:
+            print(f"[WARMUP] Failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Model loads lazily on first biometry request (not at startup)
+    asyncio.create_task(_keep_modal_warm())
     yield
 
 
@@ -63,6 +84,7 @@ app.include_router(ai.router, prefix=API_PREFIX)
 app.include_router(pet_photos.router, prefix=API_PREFIX)
 app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(consents.router, prefix=API_PREFIX)
+app.include_router(notify.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)
