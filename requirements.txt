@@ -42,3 +42,7 @@ anthropic>=0.40.0
 
 # Monitoring
 structlog==24.1.0
+sentry-sdk[fastapi]
+
+# Push notifications
+firebase-admin
