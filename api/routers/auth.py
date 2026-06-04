@@ -143,6 +143,7 @@ class UpdateProfileRequest(BaseModel):
     city: str | None = None
     state: str | None = None
     whatsapp: str | None = None
+    fcm_token: str | None = None
 
     @field_validator("cpf")
     @classmethod
@@ -214,6 +215,8 @@ async def update_me(
         user.state = body.state
     if body.whatsapp is not None:
         user.whatsapp = body.whatsapp
+    if body.fcm_token is not None:
+        user.fcm_token = body.fcm_token
 
     await db.commit()
     await db.refresh(user)
@@ -452,6 +455,48 @@ async def delete_me(
     user.reset_token = None
     user.reset_token_expires = None
     await db.commit()
+
+
+class DeleteRequestBody(BaseModel):
+    email: EmailStr
+
+
+async def _send_deletion_confirmation_email(to_email: str) -> None:
+    if not settings.resend_api_key:
+        return
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.resend_from_email,
+                "to": [to_email],
+                "subject": "Solicitação de exclusão de conta recebida — Billy",
+                "html": (
+                    "<p>Olá!</p>"
+                    "<p>Recebemos sua solicitação de exclusão de conta no Billy.</p>"
+                    "<p>Seus dados pessoais identificáveis serão anonimizados em conformidade com a LGPD.</p>"
+                    "<p>Caso tenha solicitado por engano ou mude de ideia, entre em contato: "
+                    "<a href='mailto:privacidade@appbilly.com.br'>privacidade@appbilly.com.br</a></p>"
+                    "<p>Obrigado por usar o Billy.</p>"
+                ),
+            },
+            timeout=10.0,
+        )
+
+
+@router.post("/delete-request", status_code=200, summary="Solicitar exclusão de conta (público)")
+async def delete_request(body: DeleteRequestBody, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if user and not user.deletion_requested:
+        user.deletion_requested = True
+        user.deletion_requested_at = datetime.now(timezone.utc)
+        await db.commit()
+        await _send_deletion_confirmation_email(user.email)
+
+    return {"message": "Solicitação recebida"}
 
 
 @router.post("/reset-password", status_code=200, summary="Redefinir senha com código")

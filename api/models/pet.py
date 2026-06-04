@@ -32,6 +32,9 @@ class User(Base):
     city = Column(String(100), nullable=True)
     state = Column(String(2), nullable=True)
     whatsapp = Column(String(20), nullable=True)
+    fcm_token = Column(String(255), nullable=True)
+    deletion_requested = Column(Boolean, nullable=False, default=False)
+    deletion_requested_at = Column(DateTime(timezone=True), nullable=True)
 
     pets = relationship("Pet", back_populates="owner")
 

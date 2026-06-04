@@ -1,16 +1,48 @@
+import asyncio
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import get_current_user_id
 from api.models.guardian import PetGuardian
 from api.models.pet import Pet, User
 
 router = APIRouter(prefix="/guardians", tags=["guardians"])
+
+
+async def _send_guardian_invite_email(
+    to_email: str, guardian_name: str, owner_name: str, pet_name: str
+) -> None:
+    if not settings.resend_api_key:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                json={
+                    "from": settings.resend_from_email,
+                    "to": [to_email],
+                    "subject": f"{owner_name} convidou você para cuidar de {pet_name} — Billy",
+                    "html": (
+                        f"<p>Olá, {guardian_name}!</p>"
+                        f"<p><strong>{owner_name}</strong> convidou você para ser guardião de "
+                        f"<strong>{pet_name}</strong> no Billy.</p>"
+                        f"<p><strong>Abra o app Billy</strong> para aceitar ou recusar o convite.</p>"
+                        f"<p style='color:#888;font-size:13px'>"
+                        f"Se você não usa o Billy, pode ignorar este e-mail.</p>"
+                    ),
+                },
+                timeout=10.0,
+            )
+    except Exception:
+        pass
 
 
 class InviteGuardianRequest(BaseModel):
@@ -70,6 +102,15 @@ async def invite_guardian(
     db.add(invite)
     await db.commit()
     await db.refresh(invite)
+
+    owner_result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    owner = owner_result.scalar_one_or_none()
+    asyncio.create_task(_send_guardian_invite_email(
+        to_email=body.guardian_email,
+        guardian_name=guardian.name or "Tutor",
+        owner_name=owner.name if owner else "Alguém",
+        pet_name=pet.name,
+    ))
 
     return {
         "id": str(invite.id),

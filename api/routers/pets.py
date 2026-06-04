@@ -30,6 +30,8 @@ class PetCreate(BaseModel):
     rg_animal_id: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    approximate_age: Optional[str] = None
+    special_characteristics: Optional[str] = None
 
 
 class PetIdsUpdate(BaseModel):
