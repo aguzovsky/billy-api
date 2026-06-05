@@ -27,6 +27,7 @@ async def find_similar_pets(
     search_radius_km: int,
     top_k: int,
     min_confidence: float,
+    user_id: Optional[str] = None,
 ) -> list[dict]:
     embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -95,12 +96,14 @@ async def find_similar_pets(
                 "is_verified": bool(row["owner_is_verified"]),
             }
 
+        is_mine = str(row["owner_id"]) == user_id if user_id else False
         matches.append({
             "rank": rank,
             "confidence": round(float(row["confidence"]), 4),
             "pet": pet_info,
             "owner": owner_info,
             "distance_km": round(float(row["distance_km"]), 2) if row["distance_km"] is not None else None,
+            "is_mine": is_mine,
         })
 
     return matches

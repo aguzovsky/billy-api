@@ -123,6 +123,7 @@ async def identify_pet(
     top_k: int = Form(settings.default_top_k, ge=1, le=10),
     min_confidence: float = Form(settings.default_min_confidence, ge=0.0, le=1.0),
     db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
     t0 = time.monotonic()
     image_bytes = await _read_and_validate_image(image)
@@ -151,6 +152,7 @@ async def identify_pet(
         search_radius_km=search_radius_km,
         top_k=top_k,
         min_confidence=min_confidence,
+        user_id=user_id,
     )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)

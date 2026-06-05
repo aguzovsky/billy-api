@@ -1,48 +1,55 @@
-import asyncio
+import json
+import logging
+import os
 from uuid import UUID
 
-import httpx
+import firebase_admin
+from firebase_admin import credentials, messaging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import get_current_user_id
 from api.models.guardian import PetGuardian
 from api.models.pet import Pet, User
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/guardians", tags=["guardians"])
 
+_firebase_initialized = False
 
-async def _send_guardian_invite_email(
-    to_email: str, guardian_name: str, owner_name: str, pet_name: str
-) -> None:
-    if not settings.resend_api_key:
+
+def _get_firebase():
+    global _firebase_initialized
+    if _firebase_initialized:
+        return True
+    creds_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+    if not creds_json:
+        return False
+    try:
+        cred = credentials.Certificate(json.loads(creds_json))
+        firebase_admin.initialize_app(cred)
+        _firebase_initialized = True
+        return True
+    except Exception as e:
+        logger.warning("Firebase init failed in guardians: %s", e)
+        return False
+
+
+async def _send_push(token: str | None, title: str, body: str) -> None:
+    if not token or not _get_firebase():
         return
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
-                json={
-                    "from": settings.resend_from_email,
-                    "to": [to_email],
-                    "subject": f"{owner_name} convidou você para cuidar de {pet_name} — Billy",
-                    "html": (
-                        f"<p>Olá, {guardian_name}!</p>"
-                        f"<p><strong>{owner_name}</strong> convidou você para ser guardião de "
-                        f"<strong>{pet_name}</strong> no Billy.</p>"
-                        f"<p><strong>Abra o app Billy</strong> para aceitar ou recusar o convite.</p>"
-                        f"<p style='color:#888;font-size:13px'>"
-                        f"Se você não usa o Billy, pode ignorar este e-mail.</p>"
-                    ),
-                },
-                timeout=10.0,
+        messaging.send(
+            messaging.Message(
+                notification=messaging.Notification(title=title, body=body),
+                token=token,
             )
-    except Exception:
-        pass
+        )
+    except Exception as e:
+        logger.warning("FCM send failed (guardians): %s", e)
 
 
 class InviteGuardianRequest(BaseModel):
@@ -50,16 +57,11 @@ class InviteGuardianRequest(BaseModel):
     guardian_email: EmailStr
 
 
-def _pet_dict(pet: Pet, role: str) -> dict:
-    return {
-        "id": str(pet.id),
-        "name": pet.name,
-        "species": pet.species,
-        "breed": pet.breed,
-        "status": pet.status,
-        "role": role,
-    }
+class RequestGuardianshipRequest(BaseModel):
+    pet_id: str
 
+
+# ── POST /invite ──────────────────────────────────────────────────────────────
 
 @router.post("/invite", status_code=status.HTTP_201_CREATED, summary="Convidar guardião para um pet")
 async def invite_guardian(
@@ -67,7 +69,6 @@ async def invite_guardian(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    # Verify pet ownership
     pet_result = await db.execute(
         select(Pet).where(Pet.id == UUID(body.pet_id), Pet.owner_id == UUID(user_id))
     )
@@ -75,7 +76,6 @@ async def invite_guardian(
     if pet is None:
         raise HTTPException(status_code=404, detail="Pet não encontrado ou não pertence a você")
 
-    # Find guardian by email
     guardian_result = await db.execute(select(User).where(User.email == body.guardian_email))
     guardian = guardian_result.scalar_one_or_none()
     if guardian is None:
@@ -84,7 +84,6 @@ async def invite_guardian(
     if str(guardian.id) == user_id:
         raise HTTPException(status_code=400, detail="Você não pode convidar a si mesmo")
 
-    # Check if already invited/accepted
     existing = await db.execute(
         select(PetGuardian).where(
             and_(PetGuardian.pet_id == UUID(body.pet_id), PetGuardian.guardian_id == guardian.id)
@@ -103,14 +102,12 @@ async def invite_guardian(
     await db.commit()
     await db.refresh(invite)
 
-    owner_result = await db.execute(select(User).where(User.id == UUID(user_id)))
-    owner = owner_result.scalar_one_or_none()
-    asyncio.create_task(_send_guardian_invite_email(
-        to_email=body.guardian_email,
-        guardian_name=guardian.name or "Tutor",
-        owner_name=owner.name if owner else "Alguém",
-        pet_name=pet.name,
-    ))
+    # Push notification to guardian (badge refresh na próxima troca de tab)
+    await _send_push(
+        guardian.fcm_token,
+        "Convite de guarda recebido",
+        f"Você recebeu um convite para cuidar de {pet.name}. Abra o Billy para responder.",
+    )
 
     return {
         "id": str(invite.id),
@@ -120,6 +117,57 @@ async def invite_guardian(
         "status": invite.status,
     }
 
+
+# ── POST /request ─────────────────────────────────────────────────────────────
+
+@router.post("/request", status_code=status.HTTP_201_CREATED, summary="Solicitar ser guardião de um pet")
+async def request_guardianship(
+    body: RequestGuardianshipRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    pet_result = await db.execute(select(Pet).where(Pet.id == UUID(body.pet_id)))
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet não encontrado")
+
+    if str(pet.owner_id) == user_id:
+        raise HTTPException(status_code=400, detail="Você já é o dono deste pet")
+
+    existing = await db.execute(
+        select(PetGuardian).where(
+            and_(PetGuardian.pet_id == UUID(body.pet_id), PetGuardian.guardian_id == UUID(user_id))
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Você já é guardião ou tem um pedido pendente para este pet")
+
+    requester_result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    requester = requester_result.scalar_one_or_none()
+
+    invite = PetGuardian(
+        pet_id=UUID(body.pet_id),
+        guardian_id=UUID(user_id),
+        invited_by_id=UUID(user_id),
+        status="pending",
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+
+    owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+    owner = owner_result.scalar_one_or_none()
+    requester_name = requester.name if requester else "Alguém"
+    await _send_push(
+        owner.fcm_token if owner else None,
+        "Pedido de guarda recebido",
+        f"{requester_name} quer ser guardião de {pet.name}. Abra o Billy para responder.",
+    )
+
+    return {"id": str(invite.id), "pet_id": str(invite.pet_id), "status": invite.status}
+
+
+# ── GET /invites ──────────────────────────────────────────────────────────────
 
 @router.get("/invites", summary="Meus convites pendentes de guarda")
 async def my_invites(
@@ -160,6 +208,8 @@ async def my_invites(
     ]
 
 
+# ── PATCH /invites/{id}/respond ───────────────────────────────────────────────
+
 @router.patch("/invites/{invite_id}/respond", summary="Aceitar ou recusar convite de guarda")
 async def respond_invite(
     invite_id: str,
@@ -183,6 +233,8 @@ async def respond_invite(
     return {"status": invite.status}
 
 
+# ── GET /my-pets ──────────────────────────────────────────────────────────────
+
 @router.get("/my-pets", summary="Pets onde sou guardião (guarda compartilhada)")
 async def guardian_pets(
     db: AsyncSession = Depends(get_db),
@@ -198,6 +250,7 @@ async def guardian_pets(
     if not guardianships:
         return []
 
+    invite_by_pet: dict = {g.pet_id: str(g.id) for g in guardianships}
     pet_ids = [g.pet_id for g in guardianships]
     pets_result = await db.execute(select(Pet).where(Pet.id.in_(pet_ids)))
     pets = pets_result.scalars().all()
@@ -217,25 +270,114 @@ async def guardian_pets(
             "has_biometry": False,
             "owner_name": owners_map.get(p.owner_id, User()).name,
             "role": "guardian",
+            "invite_id": invite_by_pet.get(p.id),
         }
         for p in pets
     ]
 
 
-@router.delete("/invites/{invite_id}", summary="Remover guardião")
+# ── GET /{pet_id}/all ─────────────────────────────────────────────────────────
+
+@router.get("/{pet_id}/all", summary="Todos os guardiões do pet (dono + aceitos)")
+async def all_guardians(
+    pet_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    pet_result = await db.execute(select(Pet).where(Pet.id == pet_id))
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet não encontrado")
+
+    # Only owner or accepted guardian can access
+    if str(pet.owner_id) != user_id:
+        guardian_check = await db.execute(
+            select(PetGuardian).where(
+                and_(
+                    PetGuardian.pet_id == pet_id,
+                    PetGuardian.guardian_id == UUID(user_id),
+                    PetGuardian.status == "accepted",
+                )
+            )
+        )
+        if guardian_check.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Acesso negado")
+
+    # Owner
+    owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+    owner = owner_result.scalar_one_or_none()
+
+    people = []
+    if owner:
+        people.append({
+            "id": str(owner.id),
+            "name": owner.name or "",
+            "photo_url": owner.photo_url,
+            "role": "owner",
+        })
+
+    # Accepted guardians
+    g_result = await db.execute(
+        select(PetGuardian).where(
+            and_(PetGuardian.pet_id == pet_id, PetGuardian.status == "accepted")
+        )
+    )
+    guardian_ids = [g.guardian_id for g in g_result.scalars().all()]
+    if guardian_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(guardian_ids)))
+        for u in users_result.scalars().all():
+            people.append({
+                "id": str(u.id),
+                "name": u.name or "",
+                "photo_url": u.photo_url,
+                "role": "guardian",
+            })
+
+    return people
+
+
+# ── DELETE /invites/{id} ──────────────────────────────────────────────────────
+
+@router.delete("/invites/{invite_id}", summary="Sair da guarda / remover guardião")
 async def remove_guardian(
     invite_id: str,
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    # Owner removing a guardian
     result = await db.execute(
         select(PetGuardian).join(Pet, PetGuardian.pet_id == Pet.id).where(
             and_(PetGuardian.id == UUID(invite_id), Pet.owner_id == UUID(user_id))
         )
     )
     invite = result.scalar_one_or_none()
+
+    # Guardian leaving
     if invite is None:
-        raise HTTPException(status_code=404, detail="Guardião não encontrado")
+        result = await db.execute(
+            select(PetGuardian).where(
+                and_(PetGuardian.id == UUID(invite_id), PetGuardian.guardian_id == UUID(user_id))
+            )
+        )
+        invite = result.scalar_one_or_none()
+        if invite is None:
+            raise HTTPException(status_code=404, detail="Guardião não encontrado")
+
+        # Guardian leaving → notify owner
+        pet_result = await db.execute(select(Pet).where(Pet.id == invite.pet_id))
+        pet = pet_result.scalar_one_or_none()
+        guardian_result = await db.execute(select(User).where(User.id == UUID(user_id)))
+        guardian_user = guardian_result.scalar_one_or_none()
+        owner_result = await db.execute(select(User).where(User.id == pet.owner_id)) if pet else None
+        owner = (await owner_result).scalar_one_or_none() if owner_result else None
+        guardian_name = guardian_user.name if guardian_user else "Guardião"
+        pet_name = pet.name if pet else "seu pet"
+        await _send_push(
+            owner.fcm_token if owner else None,
+            "Guardião saiu",
+            f"{guardian_name} saiu da guarda de {pet_name}.",
+        )
+
     await db.delete(invite)
     await db.commit()
     return {"status": "removed"}

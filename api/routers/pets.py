@@ -12,6 +12,7 @@ from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import get_current_user_id
 from api.models.biometry import Biometric
+from api.models.guardian import PetGuardian
 from api.models.pet import Pet, PetFoundContact
 from api.models.pet import User
 from api.services.storage import upload_photo
@@ -213,18 +214,35 @@ async def report_found_contact(
 
     owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
     owner = owner_result.scalar_one_or_none()
-    if owner and settings.resend_api_key:
-        try:
-            await _send_found_contact_email(
-                owner_email=owner.email,
-                owner_name=owner.name,
-                pet_name=pet.name,
-                finder_name=body.finder_name,
-                finder_phone=body.finder_phone,
-                location_text=body.location_text,
-            )
-        except Exception as e:
-            logger.warning("found-contact email failed: %s", e)
+
+    # Collect all recipients: owner + accepted guardians
+    recipients: list[User] = []
+    if owner:
+        recipients.append(owner)
+
+    g_result = await db.execute(
+        select(PetGuardian).where(
+            PetGuardian.pet_id == pet_id, PetGuardian.status == "accepted"
+        )
+    )
+    guardian_ids = [g.guardian_id for g in g_result.scalars().all()]
+    if guardian_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(guardian_ids)))
+        recipients.extend(users_result.scalars().all())
+
+    if settings.resend_api_key:
+        for recipient in recipients:
+            try:
+                await _send_found_contact_email(
+                    owner_email=recipient.email,
+                    owner_name=recipient.name or "",
+                    pet_name=pet.name,
+                    finder_name=body.finder_name,
+                    finder_phone=body.finder_phone,
+                    location_text=body.location_text,
+                )
+            except Exception as e:
+                logger.warning("found-contact email failed for %s: %s", recipient.email, e)
 
     return {"ok": True}
 
