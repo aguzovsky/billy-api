@@ -368,8 +368,10 @@ async def remove_guardian(
         pet = pet_result.scalar_one_or_none()
         guardian_result = await db.execute(select(User).where(User.id == UUID(user_id)))
         guardian_user = guardian_result.scalar_one_or_none()
-        owner_result = await db.execute(select(User).where(User.id == pet.owner_id)) if pet else None
-        owner = (await owner_result).scalar_one_or_none() if owner_result else None
+        owner = None
+        if pet:
+            owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+            owner = owner_result.scalar_one_or_none()
         guardian_name = guardian_user.name if guardian_user else "Guardião"
         pet_name = pet.name if pet else "seu pet"
         await _send_push(
