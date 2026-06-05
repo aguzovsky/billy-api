@@ -1,11 +1,12 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.database import get_db
 from api.core.security import get_current_user_id
+from api.models.guardian import PetGuardian
 from api.models.pet import Pet
 from api.models.pet_photo import PetPhoto
 from api.services.storage import upload_photo
@@ -41,7 +42,24 @@ async def list_photos(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    pet_result = await db.execute(select(Pet).where(Pet.id == pet_id))
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet not found")
+
+    if str(pet.owner_id) != user_id:
+        guardian_result = await db.execute(
+            select(PetGuardian).where(
+                and_(
+                    PetGuardian.pet_id == pet_id,
+                    PetGuardian.guardian_id == UUID(user_id),
+                    PetGuardian.status == "accepted",
+                )
+            )
+        )
+        if guardian_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Acesso negado")
+
     result = await db.execute(
         select(PetPhoto)
         .where(PetPhoto.pet_id == pet_id)

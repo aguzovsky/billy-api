@@ -213,6 +213,8 @@ async def guardian_pets(
             "species": p.species,
             "breed": p.breed,
             "status": p.status,
+            "photo_url": p.photo_url,
+            "has_biometry": False,
             "owner_name": owners_map.get(p.owner_id, User()).name,
             "role": "guardian",
         }
