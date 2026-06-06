@@ -136,12 +136,15 @@ async def delete_pet(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    logger.info("[delete_pet] pet_id=%s user_id=%s", pet_id, user_id)
     result = await db.execute(select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id)))
     pet = result.scalar_one_or_none()
     if pet is None:
+        logger.warning("[delete_pet] not found — pet_id=%s user_id=%s", pet_id, user_id)
         raise HTTPException(status_code=404, detail="Pet not found or not owned by you")
     await db.delete(pet)
     await db.commit()
+    logger.info("[delete_pet] ok — pet_id=%s", pet_id)
 
 
 @router.patch("/{pet_id}/status", summary="Atualizar status do pet (home/lost/found)")
