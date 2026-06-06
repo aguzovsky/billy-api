@@ -25,6 +25,13 @@ def _get_firebase():
     global _firebase_initialized
     if _firebase_initialized:
         return True
+    # Reuse already-initialized default app (e.g. from notify.py)
+    try:
+        firebase_admin.get_app()
+        _firebase_initialized = True
+        return True
+    except ValueError:
+        pass  # not initialized yet
     creds_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
     if not creds_json:
         return False
@@ -363,23 +370,27 @@ async def remove_guardian(
         if invite is None:
             raise HTTPException(status_code=404, detail="Guardião não encontrado")
 
-        # Guardian leaving → notify owner
-        pet_result = await db.execute(select(Pet).where(Pet.id == invite.pet_id))
-        pet = pet_result.scalar_one_or_none()
-        guardian_result = await db.execute(select(User).where(User.id == UUID(user_id)))
-        guardian_user = guardian_result.scalar_one_or_none()
-        owner = None
-        if pet:
-            owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
-            owner = owner_result.scalar_one_or_none()
-        guardian_name = guardian_user.name if guardian_user else "Guardião"
-        pet_name = pet.name if pet else "seu pet"
-        await _send_push(
-            owner.fcm_token if owner else None,
-            "Guardião saiu",
-            f"{guardian_name} saiu da guarda de {pet_name}.",
-        )
+        # Guardian leaving → notify owner (never block the delete)
+        try:
+            pet_result = await db.execute(select(Pet).where(Pet.id == invite.pet_id))
+            pet = pet_result.scalar_one_or_none()
+            guardian_result = await db.execute(select(User).where(User.id == UUID(user_id)))
+            guardian_user = guardian_result.scalar_one_or_none()
+            owner = None
+            if pet:
+                owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+                owner = owner_result.scalar_one_or_none()
+            guardian_name = guardian_user.name if guardian_user else "Guardião"
+            pet_name = pet.name if pet else "seu pet"
+            await _send_push(
+                owner.fcm_token if owner else None,
+                "Guardião saiu",
+                f"{guardian_name} saiu da guarda de {pet_name}.",
+            )
+        except Exception as e:
+            logger.warning("remove_guardian notify failed (non-fatal): %s", e)
 
+    logger.info("remove_guardian: deleting invite %s for user %s", invite_id, user_id)
     await db.delete(invite)
     await db.commit()
     return {"status": "removed"}
