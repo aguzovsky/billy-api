@@ -11,7 +11,7 @@ Test:
 AVISO DE CUSTO MVP — LEIA ANTES DE ALTERAR QUALQUER PARÂMETRO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   • min_containers=0 em TODAS as classes/funções GPU → escala para zero.
-  • container_idle_timeout=20 → GPU desliga após 20s sem chamadas.
+  • scaledown_window=20 → GPU desliga após 20s sem chamadas.
   • NÃO altere min_containers para 1 em GPU → cobrança contínua ~$70/mês.
   • NÃO crie warmup automático, cron ou loop que chame funções GPU.
   • Cold start esperado: 30–60 segundos (aceitável no MVP).
@@ -123,7 +123,7 @@ class PetReIDModel:
 
 
 # Handler HTTP CPU-only — não usa GPU; despacha para PetReIDModel via .remote().
-@app.function(container_idle_timeout=20, timeout=180, secrets=[aws_secret])
+@app.function(scaledown_window=20, timeout=180, secrets=[aws_secret])
 @modal.fastapi_endpoint(method="POST")
 def extract_embedding(body: dict) -> dict:
     image_b64 = body.get("image_b64", "")
@@ -220,7 +220,7 @@ class PetReIDModelFast:
 
 
 # Handler HTTP CPU-only — não usa GPU; despacha para PetReIDModelFast via .remote().
-@app.function(container_idle_timeout=20, timeout=180, secrets=[aws_secret])
+@app.function(scaledown_window=20, timeout=180, secrets=[aws_secret])
 @modal.fastapi_endpoint(method="POST")
 def extract_embedding_fast(body: dict) -> dict:
     image_b64 = body.get("image_b64", "")
