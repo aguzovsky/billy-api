@@ -48,7 +48,7 @@ aws_secret = modal.Secret.from_name("billy-aws")
 # NUNCA altere min_containers=1 aqui — T4 a $0.59/hr fica viva 24/7.
 @app.cls(
     gpu="T4",
-    container_idle_timeout=20,
+    scaledown_window=20,
     timeout=180,
     min_containers=0,
     secrets=[aws_secret],
@@ -145,7 +145,7 @@ def extract_embedding(body: dict) -> dict:
 
 @app.cls(
     gpu="T4",
-    container_idle_timeout=20,
+    scaledown_window=20,
     timeout=180,
     min_containers=0,
     secrets=[aws_secret],
