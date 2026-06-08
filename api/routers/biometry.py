@@ -187,11 +187,14 @@ async def identify_pet(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GET /warmup
+# GET /warmup — no-op intencional (MVP scale-to-zero)
 # ──────────────────────────────────────────────────────────────────────────────
 
-@router.get("/warmup", summary="Ping para manter Modal aquecido")
+@router.get("/warmup", summary="No-op — warmup automático desativado no MVP")
 async def warmup_biometry():
-    """Sem autenticação — chamado pelo cliente para acordar o container GPU."""
-    await reid_module.get_reid_service().warmup()
+    """
+    Endpoint mantido para compatibilidade com o app Flutter (ScannerScreen.initState).
+    NÃO chama Modal nem inicia GPU — warmup automático foi removido para reduzir custo.
+    GPU sobe sob demanda no primeiro registro/identificação (cold start 30–60s).
+    """
     return {"status": "ok"}

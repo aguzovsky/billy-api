@@ -321,6 +321,7 @@ async def all_guardians(
             "name": owner.name or "",
             "photo_url": owner.photo_url,
             "role": "owner",
+            "invite_id": None,
         })
 
     # Accepted guardians
@@ -329,7 +330,9 @@ async def all_guardians(
             and_(PetGuardian.pet_id == pet_id, PetGuardian.status == "accepted")
         )
     )
-    guardian_ids = [g.guardian_id for g in g_result.scalars().all()]
+    guardianships = g_result.scalars().all()
+    invite_map = {g.guardian_id: str(g.id) for g in guardianships}
+    guardian_ids = list(invite_map.keys())
     if guardian_ids:
         users_result = await db.execute(select(User).where(User.id.in_(guardian_ids)))
         for u in users_result.scalars().all():
@@ -338,6 +341,7 @@ async def all_guardians(
                 "name": u.name or "",
                 "photo_url": u.photo_url,
                 "role": "guardian",
+                "invite_id": invite_map.get(u.id),
             })
 
     return people

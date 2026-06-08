@@ -11,8 +11,6 @@ from __future__ import annotations
 import base64
 import io
 import logging
-import os
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -34,17 +32,6 @@ class PetReIDService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    async def warmup(self) -> None:
-        """Pinga o endpoint de warmup do Modal para manter o container GPU quente."""
-        warmup_url = os.getenv("MODAL_WARMUP_URL")
-        if not warmup_url:
-            return
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                await client.get(warmup_url)
-        except Exception:
-            pass  # sempre silencioso
 
     def extract_embedding(self, image_bytes: bytes) -> list[float]:
         """Retorna embedding 2048-dim L2-normalizado para uma imagem de focinho."""
