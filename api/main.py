@@ -1,4 +1,3 @@
-import asyncio
 import html as _html
 import logging
 import os
@@ -17,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.database import get_db
-from api.services import reid_service as _reid
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
 from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
@@ -39,19 +37,10 @@ logging.basicConfig(
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
-async def _keep_modal_warm():
-    while True:
-        await asyncio.sleep(240)  # 4 minutos
-        try:
-            await _reid.get_reid_service().warmup()
-            print("[WARMUP] Modal kept warm")
-        except Exception as e:
-            print(f"[WARMUP] Failed: {e}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(_keep_modal_warm())
+    # MVP: scale-to-zero — sem warmup automático de GPU.
+    # _keep_modal_warm foi removido: mantinha T4 viva 24/7 e gerou $93/mês.
     yield
 
 

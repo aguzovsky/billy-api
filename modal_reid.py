@@ -6,6 +6,17 @@ Deploy:
 
 Test:
     modal run modal_reid.py
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AVISO DE CUSTO MVP — LEIA ANTES DE ALTERAR QUALQUER PARÂMETRO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  • min_containers=0 em TODAS as classes/funções GPU → escala para zero.
+  • container_idle_timeout=20 → GPU desliga após 20s sem chamadas.
+  • NÃO altere min_containers para 1 em GPU → cobrança contínua ~$70/mês.
+  • NÃO crie warmup automático, cron ou loop que chame funções GPU.
+  • Cold start esperado: 30–60 segundos (aceitável no MVP).
+  • Handlers HTTP (extract_embedding*) são CPU-only; GPU fica nos .cls.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import base64
@@ -14,7 +25,6 @@ import os
 
 import modal
 
-# Imagem com todas as dependências necessárias
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
@@ -31,26 +41,31 @@ image = (
 
 app = modal.App("billy-reid", image=image)
 
-# Segredos AWS para baixar os pesos do S3
 aws_secret = modal.Secret.from_name("billy-aws")
 
-@app.cls(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+
+# MVP: scale-to-zero — GPU sobe sob demanda, desliga após 20s idle.
+# NUNCA altere min_containers=1 aqui — T4 a $0.59/hr fica viva 24/7.
+@app.cls(
+    gpu="T4",
+    container_idle_timeout=20,
+    timeout=180,
+    min_containers=0,
+    secrets=[aws_secret],
+)
 class PetReIDModel:
     @modal.enter()
     def load_model(self):
         import torch
         import torch.nn as nn
-        import numpy as np
         import boto3
         from resnest.torch import resnest101
-        from PIL import Image
         import torchvision.transforms as T
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print("[Billy-ReID] Modelo: ResNeSt-101 Pet-ReID-IMAG")
         print(f"[Billy-ReID] Device: {self.device}")
 
-        # Baixar pesos do S3 se não existirem localmente
         weights_path = "/tmp/model_final.pth"
         if not os.path.exists(weights_path):
             print("[Billy-ReID] Baixando pesos do S3...")
@@ -63,16 +78,12 @@ class PetReIDModel:
             s3.download_file("appbilly-photos", "models/model_final.pth", weights_path)
             print("[Billy-ReID] Pesos baixados.")
 
-        # Carregar ResNeSt-101 como backbone
         backbone = resnest101(pretrained=False)
-        # Remover camada FC final → embedding 2048-dim
         self.model = nn.Sequential(*list(backbone.children())[:-1])
 
-        # Carregar pesos treinados
         ckpt = torch.load(weights_path, map_location=self.device)
         state_dict = ckpt["model"]
 
-        # Filtrar só as chaves do backbone (remove heads.*)
         backbone_state = {
             k.replace("backbone.", ""): v
             for k, v in state_dict.items()
@@ -81,7 +92,6 @@ class PetReIDModel:
         self.model.load_state_dict(backbone_state, strict=False)
         self.model.eval().to(self.device)
 
-        # Transform igual ao treinamento (224x224, normalize ImageNet)
         self.transform = T.Compose([
             T.Resize(256),
             T.CenterCrop(224),
@@ -105,7 +115,6 @@ class PetReIDModel:
             feat = self.model(tensor)
         vec = feat.squeeze().cpu().numpy()
 
-        # L2-normalizar para cosine similarity com pgvector
         norm = np.linalg.norm(vec)
         if norm > 0:
             vec = vec / norm
@@ -113,7 +122,8 @@ class PetReIDModel:
         return vec.tolist()
 
 
-@app.function(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+# Handler HTTP CPU-only — não usa GPU; despacha para PetReIDModel via .remote().
+@app.function(container_idle_timeout=20, timeout=180, secrets=[aws_secret])
 @modal.fastapi_endpoint(method="POST")
 def extract_embedding(body: dict) -> dict:
     image_b64 = body.get("image_b64", "")
@@ -128,9 +138,18 @@ def extract_embedding(body: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # ResNeSt-50 — endpoint "fast" (cold start ~2x mais rápido que resnest101)
 # Mesmos pesos Pet-ReID-IMAG, mesma saída 2048-dim, mesmo preprocessing.
+#
+# MVP: scale-to-zero — GPU sobe sob demanda, desliga após 20s idle.
+# NUNCA altere min_containers=1 aqui — T4 a $0.59/hr fica viva 24/7.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.cls(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+@app.cls(
+    gpu="T4",
+    container_idle_timeout=20,
+    timeout=180,
+    min_containers=0,
+    secrets=[aws_secret],
+)
 class PetReIDModelFast:
     @modal.enter()
     def load_model(self):
@@ -200,7 +219,8 @@ class PetReIDModelFast:
         return vec.tolist()
 
 
-@app.function(gpu="T4", scaledown_window=300, secrets=[aws_secret])
+# Handler HTTP CPU-only — não usa GPU; despacha para PetReIDModelFast via .remote().
+@app.function(container_idle_timeout=20, timeout=180, secrets=[aws_secret])
 @modal.fastapi_endpoint(method="POST")
 def extract_embedding_fast(body: dict) -> dict:
     image_b64 = body.get("image_b64", "")
@@ -213,24 +233,19 @@ def extract_embedding_fast(body: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Warmup — acorda o container Fast sem GPU obrigatória no handler.
-# Dispara um embed com imagem dummy para inicializar o container GPU.
+# extract_embedding_warmup — REMOVIDO INTENCIONALMENTE
+#
+# Por que foi removido:
+#   • Era chamado pelo backend a cada 4min via _keep_modal_warm() em main.py
+#   • Internamente chamava PetReIDModelFast().embed.remote() → GPU T4
+#   • Com scaledown_window=300 (5min), a GPU NUNCA desligava entre chamadas
+#   • 284 chamadas de warmup num mês = GPU quase contínua = $93 de $95 do total
+#
+# Agora: GPU sobe sob demanda (cold start 30–60s), desliga após 20s idle.
+# Custo estimado MVP com volume baixo: $0–5/mês.
+#
+# NÃO recriar este endpoint sem revisar o MODAL_COST_SAFETY.md.
 # ─────────────────────────────────────────────────────────────────────────────
-
-@app.function(scaledown_window=60)
-@modal.fastapi_endpoint(method="GET")
-def extract_embedding_warmup() -> dict:
-    import numpy as np
-    from PIL import Image as _Image
-
-    arr = (np.zeros((64, 64, 3))).astype("uint8")
-    img = _Image.fromarray(arr, "RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    dummy_b64 = base64.b64encode(buf.getvalue()).decode()
-
-    PetReIDModelFast().embed.remote(dummy_b64)
-    return {"status": "warm"}
 
 
 @app.local_entrypoint()
@@ -244,7 +259,7 @@ def test():
     img.save(buf, format="JPEG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    model = PetReIDModel()
+    model = PetReIDModelFast()
     emb = model.embed.remote(b64)
     print(f"✅ Embedding shape: {len(emb)} dims")
     print(f"   First 5 values: {emb[:5]}")
