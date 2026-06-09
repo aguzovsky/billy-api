@@ -2,6 +2,7 @@ import html as _html
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import UUID
 
 import sentry_sdk
@@ -263,3 +264,12 @@ async function send(){{
 @app.get("/health", tags=["infra"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/health", tags=["infra"])
+async def api_health_check():
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "billy-api",
+    }
