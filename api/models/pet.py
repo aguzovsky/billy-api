@@ -55,6 +55,8 @@ class Pet(Base):
     status = Column(String(20), default="home")  # 'home' | 'lost' | 'found'
     source = Column(String(30), nullable=False, default="owner_registered")  # 'owner_registered' | 'found_report'
     photo_url = Column(Text)
+    approximate_age = Column(String, nullable=True)
+    special_characteristics = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     owner = relationship("User", back_populates="pets")
