@@ -347,6 +347,104 @@ async def all_guardians(
     return people
 
 
+# ── GET /{pet_id}/guardians ───────────────────────────────────────────────────
+
+@router.get("/{pet_id}/guardians", summary="Listar guardiões ativos do pet (tutor)")
+async def list_pet_guardians(
+    pet_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    pet_result = await db.execute(
+        select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id))
+    )
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet não encontrado ou não pertence a você")
+
+    g_result = await db.execute(
+        select(PetGuardian).where(
+            and_(PetGuardian.pet_id == pet_id, PetGuardian.status == "accepted")
+        )
+    )
+    guardianships = g_result.scalars().all()
+    if not guardianships:
+        return []
+
+    guardian_ids = [g.guardian_id for g in guardianships]
+    users_result = await db.execute(select(User).where(User.id.in_(guardian_ids)))
+    users_map = {u.id: u for u in users_result.scalars().all()}
+
+    return [
+        {
+            "id": str(g.id),
+            "pet_id": str(g.pet_id),
+            "guardian_user_id": str(g.guardian_id),
+            "guardian_name": (users_map.get(g.guardian_id) or User()).name or "",
+            "guardian_email": (users_map.get(g.guardian_id) or User()).email or "",
+            "status": g.status,
+        }
+        for g in guardianships
+    ]
+
+
+# ── DELETE /{pet_id}/guardians/leave ─────────────────────────────────────────
+# ATENÇÃO: deve ficar ANTES de /{pet_id}/guardians/{guardian_user_id}
+
+@router.delete("/{pet_id}/guardians/leave", status_code=status.HTTP_204_NO_CONTENT, summary="Guardião sai por conta própria")
+async def leave_guardianship(
+    pet_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(
+        select(PetGuardian).where(
+            and_(
+                PetGuardian.pet_id == pet_id,
+                PetGuardian.guardian_id == UUID(user_id),
+                PetGuardian.status == "accepted",
+            )
+        )
+    )
+    guardianship = result.scalar_one_or_none()
+    if guardianship is None:
+        raise HTTPException(status_code=404, detail="Guarda não encontrada")
+    await db.delete(guardianship)
+    await db.commit()
+
+
+# ── DELETE /{pet_id}/guardians/{guardian_user_id} ─────────────────────────────
+
+@router.delete("/{pet_id}/guardians/{guardian_user_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Tutor remove guardião")
+async def remove_guardian_by_user(
+    pet_id: UUID,
+    guardian_user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    pet_result = await db.execute(
+        select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id))
+    )
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet não encontrado ou não pertence a você")
+
+    result = await db.execute(
+        select(PetGuardian).where(
+            and_(
+                PetGuardian.pet_id == pet_id,
+                PetGuardian.guardian_id == guardian_user_id,
+                PetGuardian.status == "accepted",
+            )
+        )
+    )
+    guardianship = result.scalar_one_or_none()
+    if guardianship is None:
+        raise HTTPException(status_code=404, detail="Guardião não encontrado")
+    await db.delete(guardianship)
+    await db.commit()
+
+
 # ── DELETE /invites/{id} ──────────────────────────────────────────────────────
 
 @router.delete("/invites/{invite_id}", summary="Sair da guarda / remover guardião")
