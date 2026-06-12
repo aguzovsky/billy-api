@@ -8,6 +8,9 @@ class Settings(BaseSettings):
         protected_namespaces=(),  # allow model_* field names
     )
 
+    # Environment
+    app_env: str = "production"  # set APP_ENV=staging on Railway staging service
+
     # Database
     database_url: str = "postgresql+asyncpg://billy:billy@localhost/billy"
 

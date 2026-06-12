@@ -358,6 +358,36 @@ async def resend_verification(
     return {"message": "Se o e-mail ainda não foi confirmado, um novo link foi enviado."}
 
 
+class _BypassVerifyRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post(
+    "/dev/verify-email-bypass",
+    status_code=200,
+    summary="[STAGING] Marcar e-mail como verificado sem token",
+)
+async def dev_verify_email_bypass(
+    body: _BypassVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if settings.app_env != "staging":
+        raise HTTPException(status_code=403, detail="Endpoint disponível apenas em staging")
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    user.email_verified = True
+    user.email_verified_at = datetime.now(timezone.utc)
+    user.email_verification_token = None
+    user.email_verification_token_expires = None
+    await db.commit()
+
+    return {"email": user.email, "email_verified": True}
+
+
 def _html_page(title: str, message: str, success: bool) -> str:
     color = "#E8714A" if success else "#E84A4A"
     icon = "✓" if success else "✗"
