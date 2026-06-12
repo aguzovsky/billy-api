@@ -1,7 +1,11 @@
+import json
 import logging
+import os
 from datetime import date
 from uuid import UUID
 
+import firebase_admin
+from firebase_admin import credentials, messaging
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -10,8 +14,9 @@ from typing import Optional
 
 from api.core.database import get_db
 from api.core.security import get_current_user_id
+from api.models.guardian import PetGuardian
 from api.models.health import HealthEvent, VALID_CATEGORIES
-from api.models.pet import Pet
+from api.models.pet import Pet, User
 from api.services.storage import upload_health_proof
 
 logger = logging.getLogger(__name__)
@@ -55,14 +60,86 @@ def _serialize(e: HealthEvent) -> dict:
     }
 
 
-async def _owned_pet(pet_id: UUID, user_id: str, db: AsyncSession) -> Pet:
-    result = await db.execute(
-        select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id))
-    )
+async def _pet_access(pet_id: UUID, user_id: str, db: AsyncSession) -> Pet:
+    result = await db.execute(select(Pet).where(Pet.id == pet_id))
     pet = result.scalar_one_or_none()
     if pet is None:
-        raise HTTPException(status_code=404, detail="Pet not found or not owned by you")
+        raise HTTPException(status_code=404, detail="Pet não encontrado")
+    if str(pet.owner_id) == user_id:
+        return pet
+    guardian_check = await db.execute(
+        select(PetGuardian).where(
+            PetGuardian.pet_id == pet_id,
+            PetGuardian.guardian_id == UUID(user_id),
+            PetGuardian.status == "accepted",
+        )
+    )
+    if guardian_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Acesso negado")
     return pet
+
+
+_firebase_initialized = False
+
+
+def _get_firebase():
+    global _firebase_initialized
+    if _firebase_initialized:
+        return True
+    try:
+        firebase_admin.get_app()
+        _firebase_initialized = True
+        return True
+    except ValueError:
+        pass
+    creds_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+    if not creds_json:
+        return False
+    try:
+        cred = credentials.Certificate(json.loads(creds_json))
+        firebase_admin.initialize_app(cred)
+        _firebase_initialized = True
+        return True
+    except Exception as e:
+        logger.warning("Firebase init failed in health: %s", e)
+        return False
+
+
+async def _notify_health_update(pet: Pet, user_id: str, db: AsyncSession) -> None:
+    if not _get_firebase():
+        return
+    try:
+        owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
+        owner = owner_result.scalar_one_or_none()
+        g_result = await db.execute(
+            select(PetGuardian).where(
+                PetGuardian.pet_id == pet.id,
+                PetGuardian.status == "accepted",
+            )
+        )
+        guardian_ids = [g.guardian_id for g in g_result.scalars().all()]
+        recipients: list[User] = []
+        if owner and str(owner.id) != user_id:
+            recipients.append(owner)
+        if guardian_ids:
+            users_result = await db.execute(select(User).where(User.id.in_(guardian_ids)))
+            recipients.extend(u for u in users_result.scalars().all() if str(u.id) != user_id)
+        for u in recipients:
+            if not u.fcm_token:
+                continue
+            try:
+                messaging.send(messaging.Message(
+                    notification=messaging.Notification(
+                        title=pet.name,
+                        body="Novo registro de saúde adicionado",
+                    ),
+                    data={"type": "health_update", "pet_id": str(pet.id)},
+                    token=u.fcm_token,
+                ))
+            except Exception as e:
+                logger.warning("FCM send failed (health): %s", e)
+    except Exception as e:
+        logger.warning("_notify_health_update failed (non-fatal): %s", e)
 
 
 @router.get("/{pet_id}", summary="Listar eventos de saúde do pet")
@@ -72,7 +149,7 @@ async def list_events(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    await _pet_access(pet_id, user_id, db)
 
     query = select(HealthEvent).where(HealthEvent.pet_id == pet_id)
     if upcoming:
@@ -93,7 +170,7 @@ async def create_event(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    pet = await _pet_access(pet_id, user_id, db)
 
     if body.category not in VALID_CATEGORIES:
         raise HTTPException(
@@ -114,6 +191,7 @@ async def create_event(
     db.add(event)
     await db.commit()
     await db.refresh(event)
+    await _notify_health_update(pet, user_id, db)
     return _serialize(event)
 
 
@@ -125,7 +203,7 @@ async def update_event(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    await _pet_access(pet_id, user_id, db)
 
     result = await db.execute(
         select(HealthEvent).where(
@@ -172,7 +250,7 @@ async def delete_event(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    await _pet_access(pet_id, user_id, db)
 
     result = await db.execute(
         select(HealthEvent).where(
@@ -198,7 +276,7 @@ async def upload_proof(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    await _owned_pet(pet_id, user_id, db)
+    await _pet_access(pet_id, user_id, db)
 
     result = await db.execute(
         select(HealthEvent).where(
