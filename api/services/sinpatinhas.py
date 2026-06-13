@@ -10,10 +10,10 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from sqlalchemy import update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models.pet import Pet
+from api.models.registration import PetRegistration
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,30 @@ async def sync_pet(db: AsyncSession, pet_id: UUID, rg_animal_id: str) -> bool:
     Register/update pet in RG Animal BR.
     Returns True when sync is confirmed by Gov.br (always False until API exists).
     """
-    await db.execute(
-        update(Pet).where(Pet.id == pet_id).values(rg_animal_id=rg_animal_id)
+    result = await db.execute(
+        select(PetRegistration).where(
+            PetRegistration.pet_id == pet_id,
+            PetRegistration.type == "SINPATINHAS",
+        )
     )
+    reg = result.scalar_one_or_none()
+    sinpatinhas_number = reg.number if reg else None  # used in future Gov.br POST
+    # TODO: implement OAuth Gov.br flow and POST to
+    #       sinpatinhas.mma.gov.br/api/animais once the public API is released.
+    rga_result = await db.execute(
+        select(PetRegistration).where(
+            PetRegistration.pet_id == pet_id,
+            PetRegistration.type == "RGA-SP",
+        )
+    )
+    existing = rga_result.scalar_one_or_none()
+    if existing:
+        existing.number = rg_animal_id
+    else:
+        db.add(PetRegistration(pet_id=pet_id, type="RGA-SP", number=rg_animal_id))
     await db.commit()
-    logger.info("SinPatinhas stub: saved rg_animal_id=%s for pet=%s", rg_animal_id, pet_id)
+    logger.info(
+        "SinPatinhas stub: sinpatinhas=%s → rga=%s for pet=%s",
+        sinpatinhas_number, rg_animal_id, pet_id,
+    )
     return False  # synced = False until real integration

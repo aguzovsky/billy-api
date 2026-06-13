@@ -38,7 +38,11 @@ async def find_similar_pets(
                 p.name          AS pet_name,
                 p.species,
                 p.breed,
-                p.rg_animal_id,
+                (SELECT COALESCE(
+                    json_agg(json_build_object('type', pr.type, 'number', pr.number)
+                             ORDER BY pr.created_at),
+                    '[]'::json)
+                 FROM pet_registrations pr WHERE pr.pet_id = p.id) AS registrations,
                 p.status,
                 p.photo_url,
                 u.id            AS owner_id,
@@ -78,7 +82,7 @@ async def find_similar_pets(
             "name": row["pet_name"],
             "species": row["species"],
             "breed": row["breed"],
-            "rg_animal_id": row["rg_animal_id"],
+            "registrations": row["registrations"] or [],
             "status": row["status"],
             "photo_url": row["photo_url"],
         }

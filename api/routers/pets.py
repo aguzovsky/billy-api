@@ -16,6 +16,7 @@ from api.models.guardian import PetGuardian
 from api.models.pet import Pet, PetFoundContact
 from api.models.pet import User
 from api.services.storage import upload_photo
+from api.models.registration import PetRegistration
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +29,10 @@ class PetCreate(BaseModel):
     breed: Optional[str] = None
     color: Optional[str] = None
     gender: Optional[str] = None
-    rg_animal_id: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     approximate_age: Optional[str] = None
     special_characteristics: Optional[str] = None
-
-
-class PetIdsUpdate(BaseModel):
-    rg_animal_id: Optional[str] = None
-    sinpatinhas_id: Optional[str] = None
-    microchip_id: Optional[str] = None
 
 
 class FoundContactBody(BaseModel):
@@ -63,7 +57,6 @@ async def create_pet(
         color=body.color,    # NOVO
         gender=body.gender,  # NOVO
         owner_id=UUID(user_id),
-        rg_animal_id=body.rg_animal_id,
     )
     db.add(pet)
     await db.commit()
@@ -113,7 +106,13 @@ async def list_my_pets(
     bio_result = await db.execute(select(Biometric.pet_id).where(Biometric.pet_id.in_(pet_ids)))
     pets_with_bio = {row[0] for row in bio_result.all()}
 
-    return [_serialize(p, has_biometry=p.id in pets_with_bio) for p in pets]
+    reg_result = await db.execute(
+        select(PetRegistration).where(PetRegistration.pet_id.in_(pet_ids))
+    )
+    regs_by_pet: dict = {}
+    for r in reg_result.scalars().all():
+        regs_by_pet.setdefault(r.pet_id, []).append(r)
+    return [_serialize(p, has_biometry=p.id in pets_with_bio, registrations=regs_by_pet.get(p.id, [])) for p in pets]
 
 
 @router.get("/{pet_id}", summary="Buscar pet por ID")
@@ -127,7 +126,11 @@ async def get_pet(
     if pet is None:
         raise HTTPException(status_code=404, detail="Pet not found")
     has_bio = await db.scalar(select(func.count()).where(Biometric.pet_id == pet.id)) > 0
-    return _serialize(pet, has_biometry=has_bio)
+    reg_result = await db.execute(
+        select(PetRegistration).where(PetRegistration.pet_id == pet_id)
+    )
+    registrations = list(reg_result.scalars().all())
+    return _serialize(pet, has_biometry=has_bio, registrations=registrations)
 
 
 @router.delete("/{pet_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Deletar pet")
@@ -178,6 +181,10 @@ async def get_pet_public(
         raise HTTPException(status_code=404, detail="Pet not found")
     owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
     owner = owner_result.scalar_one_or_none()
+    reg_result = await db.execute(
+        select(PetRegistration).where(PetRegistration.pet_id == pet_id)
+    )
+    regs = reg_result.scalars().all()
     return {
         "id": str(pet.id),
         "name": pet.name,
@@ -185,9 +192,10 @@ async def get_pet_public(
         "breed": pet.breed,
         "photo_url": pet.photo_url,
         "status": pet.status,
-        "rg_animal_id": pet.rg_animal_id,
-        "sinpatinhas_id": pet.sinpatinhas_id,
-        "microchip_id": pet.microchip_id,
+        "registrations": [
+            {"id": str(r.id), "type": r.type, "type_label": r.type_label, "number": r.number}
+            for r in regs
+        ],
         "owner": {
             "name": owner.name,
             "is_verified": owner.is_verified,
@@ -250,33 +258,6 @@ async def report_found_contact(
     return {"ok": True}
 
 
-@router.patch("/{pet_id}", summary="Atualizar IDs de identidade do pet")
-async def update_pet_ids(
-    pet_id: UUID,
-    body: PetIdsUpdate,
-    db: AsyncSession = Depends(get_db),
-    user_id: str = Depends(get_current_user_id),
-):
-    result = await db.execute(
-        select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id))
-    )
-    pet = result.scalar_one_or_none()
-    if pet is None:
-        raise HTTPException(status_code=404, detail="Pet not found or not owned by you")
-
-    if body.rg_animal_id is not None:
-        pet.rg_animal_id = body.rg_animal_id or None
-    if body.sinpatinhas_id is not None:
-        pet.sinpatinhas_id = body.sinpatinhas_id or None
-    if body.microchip_id is not None:
-        pet.microchip_id = body.microchip_id or None
-
-    await db.commit()
-    await db.refresh(pet)
-    has_bio = await db.scalar(select(func.count()).where(Biometric.pet_id == pet.id)) > 0
-    return _serialize(pet, has_biometry=has_bio)
-
-
 async def _send_found_contact_email(
     owner_email: str,
     owner_name: str,
@@ -316,7 +297,7 @@ async def _send_found_contact_email(
         )
 
 
-def _serialize(pet: Pet, has_biometry: bool = False) -> dict:
+def _serialize(pet: Pet, has_biometry: bool = False, registrations: list | None = None) -> dict:
     return {
         "id": str(pet.id),
         "name": pet.name,
@@ -325,9 +306,10 @@ def _serialize(pet: Pet, has_biometry: bool = False) -> dict:
         "color": pet.color,
         "gender": pet.gender,
         "owner_id": str(pet.owner_id),
-        "rg_animal_id": pet.rg_animal_id,
-        "sinpatinhas_id": pet.sinpatinhas_id,
-        "microchip_id": pet.microchip_id,
+        "registrations": [
+            {"id": str(r.id), "type": r.type, "type_label": r.type_label, "number": r.number}
+            for r in (registrations or [])
+        ],
         "status": pet.status,
         "photo_url": pet.photo_url,
         "source": pet.source,

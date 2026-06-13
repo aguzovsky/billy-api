@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.core.database import get_db
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
+from api.models.registration import PetRegistration
 from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers PetPhoto with Base
 from api.models import health as _health_model  # noqa: F401 — registers HealthEvent with Base
 from api.models import consent as _consent_model  # noqa: F401 — registers UserConsent with Base
-from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify
+from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify, pet_registrations
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", "https://80417d985fc75686827188afff05bce0@o4511469145423873.ingest.us.sentry.io/4511469149945856"),
@@ -75,6 +76,7 @@ app.include_router(pet_photos.router, prefix=API_PREFIX)
 app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(consents.router, prefix=API_PREFIX)
 app.include_router(notify.router, prefix=API_PREFIX)
+app.include_router(pet_registrations.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)
@@ -92,10 +94,13 @@ async def pet_public_page(pet_id: str, db: AsyncSession = Depends(get_db)):
     owner_result = await db.execute(select(User).where(User.id == pet.owner_id))
     owner = owner_result.scalar_one_or_none()
 
-    return HTMLResponse(_render_pet_page(pet, owner))
+    reg_result = await db.execute(select(PetRegistration).where(PetRegistration.pet_id == uid))
+    registrations = reg_result.scalars().all()
+
+    return HTMLResponse(_render_pet_page(pet, owner, registrations))
 
 
-def _render_pet_page(pet: Pet, owner) -> str:
+def _render_pet_page(pet: Pet, owner, registrations=None) -> str:
     safe = _html.escape
     name = safe(pet.name or "")
     breed = safe(pet.breed or "")
@@ -119,12 +124,14 @@ def _render_pet_page(pet: Pet, owner) -> str:
     ) if is_lost else ""
 
     id_rows = []
-    if pet.rg_animal_id:
-        id_rows.append(f'<div class="id-row"><span class="id-label">RG Animal</span><span class="id-value">#{safe(pet.rg_animal_id)}</span></div>')
-    if pet.sinpatinhas_id:
-        id_rows.append(f'<div class="id-row"><span class="id-label">SinPatinhas</span><span class="id-value">#{safe(pet.sinpatinhas_id)}</span></div>')
-    if pet.microchip_id:
-        id_rows.append(f'<div class="id-row"><span class="id-label">Microchip</span><span class="id-value">#{safe(pet.microchip_id)}</span></div>')
+    _type_labels = {"MICROCHIP": "Microchip", "SINPATINHAS": "SinPatinhas",
+                    "RGA-SP": "RGA-SP", "SIA-CWB": "SIA-CWB"}
+    for reg in (registrations or []):
+        label = _type_labels.get(reg.type, reg.type_label or reg.type)
+        id_rows.append(
+            f'<div class="id-row"><span class="id-label">{safe(label)}</span>'
+            f'<span class="id-value">#{safe(reg.number)}</span></div>'
+        )
 
     ids_section_html = (
         '<div class="divider"></div><div class="section-title">Identificação</div>' + "".join(id_rows)

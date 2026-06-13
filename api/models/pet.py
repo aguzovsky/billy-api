@@ -49,9 +49,6 @@ class Pet(Base):
     color = Column(String(100))   # NOVO — cor do pelo
     gender = Column(String(10))   # NOVO — 'male' | 'female'
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    rg_animal_id = Column(String(50))
-    sinpatinhas_id = Column(String(50), nullable=True)
-    microchip_id = Column(String(50), nullable=True)
     status = Column(String(20), default="home")  # 'home' | 'lost' | 'found'
     source = Column(String(30), nullable=False, default="owner_registered")  # 'owner_registered' | 'found_report'
     photo_url = Column(Text)
@@ -66,6 +63,7 @@ class Pet(Base):
     photos = relationship("PetPhoto", back_populates="pet", cascade="all, delete-orphan")
     found_contacts = relationship("PetFoundContact", back_populates="pet", cascade="all, delete-orphan")
     health_events = relationship("HealthEvent", back_populates="pet", cascade="all, delete-orphan")
+    registrations = relationship("PetRegistration", back_populates="pet", cascade="all, delete-orphan")
 
 
 class PetFoundContact(Base):
