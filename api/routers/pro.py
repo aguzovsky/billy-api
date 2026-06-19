@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -15,6 +16,7 @@ from api.core.security import (
     hash_password,
     verify_password,
 )
+from api.data.pet_breeds import BREEDS_BY_SPECIES
 from api.models.pro import (
     Establishment,
     ProAppointment,
@@ -25,10 +27,24 @@ from api.models.pro import (
     ProSubscription,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/pro", tags=["pro"])
 
 ESTABLISHMENT_TYPES = ["clinica", "petshop", "hotel", "daycare", "autonomo", "misto"]
-PET_SPECIES = ["cachorro", "gato", "outro"]
+PET_SPECIES = ["dog", "cat"]  # igual ao Billy App
+PET_APPROXIMATE_AGES = ["puppy", "young", "adult", "senior"]
+PET_GENDERS = ["male", "female", "unknown"]
+
+
+def _check_breed(species: str, breed: Optional[str]) -> None:
+    """Valida breed contra a lista fixa por espécie. Não bloqueia o cadastro
+    ainda — só loga um warning quando não bate, igual pedido no alinhamento inicial."""
+    if not breed:
+        return
+    valid_breeds = BREEDS_BY_SPECIES.get(species, [])
+    if breed not in valid_breeds:
+        logger.warning("breed '%s' não está na lista conhecida para species '%s'", breed, species)
 
 
 def _validate_password_strength(password: str) -> str:
@@ -89,7 +105,7 @@ class TokenOut(BaseModel):
 
 class ClientCreate(BaseModel):
     name: str
-    phone: Optional[str] = None
+    contact_phone: Optional[str] = None
     document: Optional[str] = None
     neighborhood: Optional[str] = None
     notes: Optional[str] = None
@@ -99,7 +115,7 @@ class ClientOut(BaseModel):
     id: str
     establishment_id: str
     name: str
-    phone: Optional[str]
+    contact_phone: Optional[str]
     document: Optional[str]
     neighborhood: Optional[str]
     notes: Optional[str]
@@ -109,7 +125,7 @@ class ClientOut(BaseModel):
 
 class ClientUpdate(BaseModel):
     name: Optional[str] = None
-    phone: Optional[str] = None
+    contact_phone: Optional[str] = None
     document: Optional[str] = None
     neighborhood: Optional[str] = None
     notes: Optional[str] = None
@@ -120,16 +136,31 @@ class PetCreate(BaseModel):
     name: str
     species: str
     breed: Optional[str] = None
-    age: Optional[str] = None
-    weight: Optional[str] = None
-    temperament: Optional[str] = None
-    alerts: Optional[str] = None
+    approximate_age: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = "unknown"
+    special_characteristics: Optional[str] = None
+    weight: Optional[str] = None  # exclusivo do Pro — não existe no Billy App ainda
 
     @field_validator("species")
     @classmethod
     def species_valid(cls, v: str) -> str:
         if v not in PET_SPECIES:
             raise ValueError(f"species deve ser um de: {', '.join(PET_SPECIES)}")
+        return v
+
+    @field_validator("approximate_age")
+    @classmethod
+    def approximate_age_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in PET_APPROXIMATE_AGES:
+            raise ValueError(f"approximate_age deve ser um de: {', '.join(PET_APPROXIMATE_AGES)}")
+        return v
+
+    @field_validator("gender")
+    @classmethod
+    def gender_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in PET_GENDERS:
+            raise ValueError(f"gender deve ser um de: {', '.join(PET_GENDERS)}")
         return v
 
 
@@ -139,7 +170,10 @@ class PetOut(BaseModel):
     name: str
     species: str
     breed: Optional[str]
-    age: Optional[str]
+    approximate_age: Optional[str]
+    color: Optional[str]
+    gender: Optional[str]
+    special_characteristics: Optional[str]
     weight: Optional[str]
     biometry_status: str
     billy_pet_id: Optional[str]
@@ -150,10 +184,11 @@ class PetUpdate(BaseModel):
     name: Optional[str] = None
     species: Optional[str] = None
     breed: Optional[str] = None
-    age: Optional[str] = None
+    approximate_age: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = None
+    special_characteristics: Optional[str] = None
     weight: Optional[str] = None
-    temperament: Optional[str] = None
-    alerts: Optional[str] = None
 
 
 class AppointmentCreate(BaseModel):
@@ -277,7 +312,7 @@ def _client_out(c: ProClient) -> dict:
         "id": str(c.id),
         "establishment_id": str(c.establishment_id),
         "name": c.name,
-        "phone": c.phone,
+        "contact_phone": c.contact_phone,
         "document": c.document,
         "neighborhood": c.neighborhood,
         "notes": c.notes,
@@ -293,7 +328,10 @@ def _pet_out(p: ProPet) -> dict:
         "name": p.name,
         "species": p.species,
         "breed": p.breed,
-        "age": p.age,
+        "approximate_age": p.approximate_age,
+        "color": p.color,
+        "gender": p.gender,
+        "special_characteristics": p.special_characteristics,
         "weight": p.weight,
         "biometry_status": p.biometry_status,
         "billy_pet_id": str(p.billy_pet_id) if p.billy_pet_id else None,
@@ -511,7 +549,7 @@ async def create_client(
     client = ProClient(
         establishment_id=UUID(establishment_id),
         name=body.name,
-        phone=body.phone,
+        contact_phone=body.contact_phone,
         document=body.document,
         neighborhood=body.neighborhood,
         notes=body.notes,
@@ -547,8 +585,8 @@ async def update_client(
 
     if body.name is not None:
         client.name = body.name
-    if body.phone is not None:
-        client.phone = body.phone
+    if body.contact_phone is not None:
+        client.contact_phone = body.contact_phone
     if body.document is not None:
         client.document = body.document
     if body.neighborhood is not None:
@@ -594,6 +632,7 @@ async def create_pet(
     establishment_id: str = Depends(get_current_establishment_id),
 ):
     await _get_client(UUID(body.client_id), establishment_id, db)
+    _check_breed(body.species, body.breed)
 
     pet = ProPet(
         client_id=UUID(body.client_id),
@@ -601,10 +640,11 @@ async def create_pet(
         name=body.name,
         species=body.species,
         breed=body.breed,
-        age=body.age,
+        approximate_age=body.approximate_age,
+        color=body.color,
+        gender=body.gender,
+        special_characteristics=body.special_characteristics,
         weight=body.weight,
-        temperament=body.temperament,
-        alerts=body.alerts,
     )
     db.add(pet)
     await db.commit()
@@ -628,15 +668,25 @@ async def update_pet(
             raise HTTPException(status_code=400, detail=f"species deve ser um de: {', '.join(PET_SPECIES)}")
         pet.species = body.species
     if body.breed is not None:
+        _check_breed(body.species or pet.species, body.breed)
         pet.breed = body.breed
-    if body.age is not None:
-        pet.age = body.age
+    if body.approximate_age is not None:
+        if body.approximate_age not in PET_APPROXIMATE_AGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"approximate_age deve ser um de: {', '.join(PET_APPROXIMATE_AGES)}",
+            )
+        pet.approximate_age = body.approximate_age
+    if body.color is not None:
+        pet.color = body.color
+    if body.gender is not None:
+        if body.gender not in PET_GENDERS:
+            raise HTTPException(status_code=400, detail=f"gender deve ser um de: {', '.join(PET_GENDERS)}")
+        pet.gender = body.gender
+    if body.special_characteristics is not None:
+        pet.special_characteristics = body.special_characteristics
     if body.weight is not None:
         pet.weight = body.weight
-    if body.temperament is not None:
-        pet.temperament = body.temperament
-    if body.alerts is not None:
-        pet.alerts = body.alerts
 
     await db.commit()
     await db.refresh(pet)
@@ -918,6 +968,6 @@ async def billy_connect_pet(
         "pet": _pet_out(pet),
         "client": {
             "name": client.name if client else None,
-            "phone": client.phone if client else None,
+            "contact_phone": client.contact_phone if client else None,
         },
     }

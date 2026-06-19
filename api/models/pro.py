@@ -63,7 +63,7 @@ class ProClient(Base):
     establishment_id = Column(UUID(as_uuid=True), ForeignKey("establishments.id", ondelete="CASCADE"),
                                nullable=False)
     name = Column(String(100), nullable=False)
-    phone = Column(String(20), nullable=True)
+    contact_phone = Column(String(20), nullable=True)
     document = Column(String(20), nullable=True)
     neighborhood = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
@@ -89,12 +89,14 @@ class ProPet(Base):
     establishment_id = Column(UUID(as_uuid=True), ForeignKey("establishments.id", ondelete="CASCADE"),
                                nullable=False)
     name = Column(String(100), nullable=False)
-    species = Column(String(10), nullable=False)  # 'cachorro'|'gato'|'outro'
-    breed = Column(String(100), nullable=True)
-    age = Column(String(50), nullable=True)
+    species = Column(String(10), nullable=False)  # 'dog'|'cat' — igual ao Billy App
+    breed = Column(String(100), nullable=True)  # validado contra api/data/pet_breeds.py no router
+    approximate_age = Column(String(10), nullable=True)  # 'puppy'|'young'|'adult'|'senior'
+    color = Column(String(100), nullable=True)
+    gender = Column(String(10), nullable=True, default="unknown")  # 'male'|'female'|'unknown'
+    special_characteristics = Column(Text, nullable=True)
+    # weight não existe no Billy App ainda — fica órfão até a ponte real ganhar esse campo também
     weight = Column(String(20), nullable=True)
-    temperament = Column(String(255), nullable=True)  # JSON string separado por vírgula
-    alerts = Column(String(255), nullable=True)  # JSON string
     billy_pet_id = Column(UUID(as_uuid=True), nullable=True)  # ponte futura com Pet do App
     biometry_status = Column(String(20), nullable=False, default="nao_registrada")  # 'registrada'|'nao_registrada'
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
