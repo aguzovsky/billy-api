@@ -24,6 +24,7 @@ from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers
 from api.models import health as _health_model  # noqa: F401 — registers HealthEvent with Base
 from api.models import consent as _consent_model  # noqa: F401 — registers UserConsent with Base
 from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify, pet_registrations
+from api.routers import pro
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", "https://80417d985fc75686827188afff05bce0@o4511469145423873.ingest.us.sentry.io/4511469149945856"),
@@ -77,6 +78,7 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(consents.router, prefix=API_PREFIX)
 app.include_router(notify.router, prefix=API_PREFIX)
 app.include_router(pet_registrations.router, prefix=API_PREFIX)
+app.include_router(pro.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)
