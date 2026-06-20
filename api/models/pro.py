@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
 from api.core.database import Base
@@ -21,6 +21,7 @@ class Establishment(Base):
     neighborhood = Column(String(100), nullable=True)
     city = Column(String(100), nullable=True)
     description = Column(String(500), nullable=True)
+    tags = Column(ARRAY(String), nullable=False, default=list)
     is_active = Column(Boolean, nullable=False, default=True)
     is_email_verified = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

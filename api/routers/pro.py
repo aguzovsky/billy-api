@@ -93,9 +93,31 @@ class EstablishmentOut(BaseModel):
     type: str
     email: str
     whatsapp: Optional[str]
+    address: Optional[str]
+    neighborhood: Optional[str]
     city: Optional[str]
+    description: Optional[str]
+    tags: list[str]
     is_email_verified: bool
     created_at: str
+
+
+class EstablishmentUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    whatsapp: Optional[str] = None
+    address: Optional[str] = None
+    neighborhood: Optional[str] = None
+    city: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+    @field_validator("type")
+    @classmethod
+    def type_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ESTABLISHMENT_TYPES:
+            raise ValueError(f"type deve ser um de: {', '.join(ESTABLISHMENT_TYPES)}")
+        return v
 
 
 class TokenOut(BaseModel):
@@ -301,7 +323,11 @@ def _establishment_out(e: Establishment) -> dict:
         "type": e.type,
         "email": e.email,
         "whatsapp": e.whatsapp,
+        "address": e.address,
+        "neighborhood": e.neighborhood,
         "city": e.city,
+        "description": e.description,
+        "tags": e.tags or [],
         "is_email_verified": e.is_email_verified,
         "created_at": e.created_at.isoformat(),
     }
@@ -520,6 +546,39 @@ async def get_me(
     establishment = result.scalar_one_or_none()
     if not establishment:
         raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+    return _establishment_out(establishment)
+
+
+@router.patch("/auth/me", summary="Atualizar dados do estabelecimento")
+async def update_me(
+    body: EstablishmentUpdate,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if not establishment:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    if body.name is not None:
+        establishment.name = body.name
+    if body.type is not None:
+        establishment.type = body.type
+    if body.whatsapp is not None:
+        establishment.whatsapp = body.whatsapp
+    if body.address is not None:
+        establishment.address = body.address
+    if body.neighborhood is not None:
+        establishment.neighborhood = body.neighborhood
+    if body.city is not None:
+        establishment.city = body.city
+    if body.description is not None:
+        establishment.description = body.description
+    if body.tags is not None:
+        establishment.tags = body.tags
+
+    await db.commit()
+    await db.refresh(establishment)
     return _establishment_out(establishment)
 
 
