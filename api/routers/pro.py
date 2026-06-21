@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, field_validator
@@ -45,6 +46,21 @@ def _check_breed(species: str, breed: Optional[str]) -> None:
     valid_breeds = BREEDS_BY_SPECIES.get(species, [])
     if breed not in valid_breeds:
         logger.warning("breed '%s' não está na lista conhecida para species '%s'", breed, species)
+
+
+SAO_PAULO_TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def _check_not_past(date_str: str, time_str: str) -> None:
+    """Garante que date+time não está no passado, usando horário de
+    Brasília — nunca o horário UTC do servidor (mesmo bug de timezone
+    corrigido no frontend)."""
+    try:
+        candidate = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=SAO_PAULO_TZ)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="date/time em formato inválido (esperado YYYY-MM-DD / HH:MM).")
+    if candidate <= datetime.now(SAO_PAULO_TZ):
+        raise HTTPException(status_code=422, detail="Não é possível agendar para uma data/hora que já passou.")
 
 
 def _validate_password_strength(password: str) -> str:
@@ -798,6 +814,7 @@ async def create_appointment(
 ):
     await _get_client(UUID(body.client_id), establishment_id, db)
     await _get_pet(UUID(body.pet_id), establishment_id, db)
+    _check_not_past(body.date, body.time)
 
     appointment = ProAppointment(
         establishment_id=UUID(establishment_id),
@@ -828,6 +845,11 @@ async def update_appointment(
     establishment_id: str = Depends(get_current_establishment_id),
 ):
     appointment = await _get_appointment(appointment_id, establishment_id, db)
+
+    if body.date is not None or body.time is not None:
+        new_date = body.date if body.date is not None else appointment.date
+        new_time = body.time if body.time is not None else appointment.time
+        _check_not_past(new_date, new_time)
 
     if body.status is not None:
         appointment.status = body.status
