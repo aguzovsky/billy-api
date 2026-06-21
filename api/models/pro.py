@@ -22,6 +22,8 @@ class Establishment(Base):
     city = Column(String(100), nullable=True)
     description = Column(String(500), nullable=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
+    # JSON string: {"monday": {"open": "08:00", "close": "19:00", "closed": false}, ...}
+    opening_hours = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     is_email_verified = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
