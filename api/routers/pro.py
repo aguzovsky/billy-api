@@ -252,6 +252,8 @@ class AppointmentUpdate(BaseModel):
     payment_method: Optional[str] = None
     amount: Optional[float] = None
     notes: Optional[str] = None
+    date: Optional[str] = None
+    time: Optional[str] = None
 
 
 class ServiceCreate(BaseModel):
@@ -832,6 +834,10 @@ async def update_appointment(
         appointment.amount = body.amount
     if body.notes is not None:
         appointment.notes = body.notes
+    if body.date is not None:
+        appointment.date = body.date
+    if body.time is not None:
+        appointment.time = body.time
 
     await db.commit()
     await db.refresh(appointment)
