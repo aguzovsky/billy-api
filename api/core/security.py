@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.core.config import settings
@@ -19,8 +19,9 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(subject: str, extra_claims: dict | None = None) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+def create_access_token(subject: str, extra_claims: dict | None = None, expires_minutes: int | None = None) -> str:
+    minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     payload = {"sub": subject, "exp": expire}
     if extra_claims:
         payload.update(extra_claims)
@@ -48,9 +49,23 @@ async def get_current_user_id(
 
 
 async def get_current_establishment_id(
+    response: Response,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> str:
     payload = decode_token_payload(credentials.credentials)
     if payload.get("type") != "establishment":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token não pertence a um estabelecimento")
-    return payload["sub"]
+
+    establishment_id = payload["sub"]
+
+    # Sessão deslizante: toda chamada autenticada de sucesso renova o token (só
+    # expira de vez após pro_access_token_expire_minutes de inatividade real).
+    # Isolado do Billy App — este dependency só é usado por api/routers/pro.py.
+    refreshed = create_access_token(
+        establishment_id,
+        extra_claims={"type": "establishment"},
+        expires_minutes=settings.pro_access_token_expire_minutes,
+    )
+    response.headers["X-Refreshed-Token"] = refreshed
+
+    return establishment_id

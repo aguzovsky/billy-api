@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # Auth — Billy Pro (establishments). Separado do valor acima de propósito: sessão
+    # deslizante do Pro (renovada a cada chamada, ver get_current_establishment_id)
+    # não deve alterar a duração da sessão dos tutores do Billy App.
+    pro_access_token_expire_minutes: int = 1440
+
     # Model
     model_weights_dir: str = "./weights"
     model_device: str = "cuda"

@@ -63,6 +63,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # X-Refreshed-Token (sessão deslizante do Billy Pro) é header customizado — sem
+    # expose_headers o browser recebe mas o JS não consegue ler via fetch().
+    expose_headers=["X-Refreshed-Token"],
 )
 
 API_PREFIX = "/api/v1"

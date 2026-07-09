@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.core.database import get_db
 from api.core.security import (
     create_access_token,
@@ -542,7 +543,11 @@ async def register(body: EstablishmentRegister, db: AsyncSession = Depends(get_d
     db.add(subscription)
     await db.commit()
 
-    token = create_access_token(str(establishment.id), extra_claims={"type": "establishment"})
+    token = create_access_token(
+        str(establishment.id),
+        extra_claims={"type": "establishment"},
+        expires_minutes=settings.pro_access_token_expire_minutes,
+    )
     return TokenOut(access_token=token)
 
 
@@ -554,7 +559,11 @@ async def login(body: EstablishmentLogin, db: AsyncSession = Depends(get_db)):
     if not establishment or not verify_password(body.password, establishment.hashed_password):
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
-    token = create_access_token(str(establishment.id), extra_claims={"type": "establishment"})
+    token = create_access_token(
+        str(establishment.id),
+        extra_claims={"type": "establishment"},
+        expires_minutes=settings.pro_access_token_expire_minutes,
+    )
     return TokenOut(access_token=token)
 
 
