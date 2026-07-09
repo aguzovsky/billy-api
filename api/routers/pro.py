@@ -534,9 +534,11 @@ async def register(body: EstablishmentRegister, db: AsyncSession = Depends(get_d
     await db.commit()
     await db.refresh(establishment)
 
+    # Plano free de entrada por track: 'latido' (autônomo) vs 'coleira' (estabelecimento).
+    default_plan_id = "latido" if body.type == "autonomo" else "coleira"
     subscription = ProSubscription(
         establishment_id=establishment.id,
-        plan_id="coleira",
+        plan_id=default_plan_id,
         status="trial",
         trial_ends_at=datetime.now(timezone.utc) + timedelta(days=14),
     )
