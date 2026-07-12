@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,7 @@ from api.models.pro import (
     ProService,
     ProSubscription,
 )
+from api.services import storage
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,7 @@ def _establishment_out(e: Establishment) -> dict:
         "description": e.description,
         "tags": e.tags or [],
         "opening_hours": e.opening_hours,
+        "photo_url": e.photo_url,
         "is_email_verified": e.is_email_verified,
         "created_at": e.created_at.isoformat(),
     }
@@ -614,6 +616,35 @@ async def update_me(
     await db.commit()
     await db.refresh(establishment)
     return _establishment_out(establishment)
+
+
+@router.patch("/auth/me/photo", summary="Upload foto do profissional/estabelecimento")
+async def update_me_photo(
+    photo: UploadFile = File(..., description="Foto do profissional (JPG/PNG)"),
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if not establishment:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    image_bytes = await photo.read()
+    max_bytes = settings.max_image_size_mb * 1024 * 1024
+    if len(image_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "IMAGE_TOO_LARGE", "message": f"Imagem maior que {settings.max_image_size_mb}MB"},
+        )
+
+    photo_url = await storage.upload_establishment_photo(image_bytes, photo.content_type or "image/jpeg")
+
+    if photo_url:
+        establishment.photo_url = photo_url
+        await db.commit()
+        await db.refresh(establishment)
+
+    return {"photo_url": establishment.photo_url}
 
 
 # ── Clients ──────────────────────────────────────────────────────────────

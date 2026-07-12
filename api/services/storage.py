@@ -77,6 +77,28 @@ async def upload_user_photo(image_bytes: bytes, content_type: str = "image/jpeg"
         return None
 
 
+def _upload_establishment_photo_sync(image_bytes: bytes, content_type: str) -> str | None:
+    key = f"establishments/{uuid.uuid4()}.jpg"
+    client = _get_client()
+    client.put_object(
+        Bucket=settings.aws_s3_bucket,
+        Key=key,
+        Body=io.BytesIO(image_bytes),
+        ContentType=content_type,
+    )
+    return f"https://{settings.aws_s3_bucket}.s3.{settings.aws_s3_region}.amazonaws.com/{key}"
+
+
+async def upload_establishment_photo(image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
+    """Uploads Billy Pro establishment/professional photo to S3. Returns None if storage is unavailable."""
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _upload_establishment_photo_sync, image_bytes, content_type)
+    except Exception as exc:
+        _log.warning("Establishment photo upload failed (storage unavailable): %s", exc)
+        return None
+
+
 def _upload_health_proof_sync(image_bytes: bytes, content_type: str) -> str | None:
     key = f"health/{uuid.uuid4()}.jpg"
     client = _get_client()
