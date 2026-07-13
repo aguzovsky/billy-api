@@ -647,6 +647,54 @@ async def update_me_photo(
     return {"photo_url": establishment.photo_url}
 
 
+# ── Público (sem autenticação) ───────────────────────────────────────────
+# BIL-66/Lote B: página pública de perfil (billy-pro). Só campos seguros pra
+# exposição sem login — nunca email, endereço completo, CPF/CNPJ. O whatsapp
+# volta no JSON (o frontend usa só pra montar o link wa.me, nunca renderiza
+# o número como texto solto na página).
+
+
+def _public_establishment_out(e: Establishment, services: list[ProService]) -> dict:
+    return {
+        "id": str(e.id),
+        "name": e.name,
+        "type": e.type,
+        "photo_url": e.photo_url,
+        "neighborhood": e.neighborhood,
+        "opening_hours": e.opening_hours,
+        "description": e.description,
+        "tags": e.tags or [],
+        "whatsapp": e.whatsapp,
+        "services": [
+            {"id": str(s.id), "name": s.name, "price": s.price, "duration": s.duration}
+            for s in services
+        ],
+    }
+
+
+@router.get("/public/establishments/{establishment_id}", summary="Perfil público (sem autenticação)")
+async def get_public_establishment(establishment_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Establishment).where(
+            Establishment.id == establishment_id,
+            Establishment.is_active == True,  # noqa: E712
+        )
+    )
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Perfil não encontrado")
+
+    services_result = await db.execute(
+        select(ProService).where(
+            ProService.establishment_id == establishment_id,
+            ProService.active == True,  # noqa: E712
+        )
+    )
+    services = list(services_result.scalars().all())
+
+    return _public_establishment_out(establishment, services)
+
+
 # ── Clients ──────────────────────────────────────────────────────────────
 
 
