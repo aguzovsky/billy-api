@@ -1116,6 +1116,17 @@ async def update_reminder(
     return _reminder_out(reminder)
 
 
+@router.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remover lembrete")
+async def delete_reminder(
+    reminder_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    reminder = await _get_reminder(reminder_id, establishment_id, db)
+    await db.delete(reminder)
+    await db.commit()
+
+
 # ── Subscription ─────────────────────────────────────────────────────────
 
 
