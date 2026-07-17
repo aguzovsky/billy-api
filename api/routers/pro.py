@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.config import settings
@@ -654,7 +654,7 @@ async def update_me_photo(
 # o número como texto solto na página).
 
 
-def _public_establishment_out(e: Establishment, services: list[ProService]) -> dict:
+def _public_establishment_out(e: Establishment, services: list[ProService], completed_count: int) -> dict:
     return {
         "id": str(e.id),
         "name": e.name,
@@ -669,6 +669,7 @@ def _public_establishment_out(e: Establishment, services: list[ProService]) -> d
             {"id": str(s.id), "name": s.name, "price": s.price, "duration": s.duration}
             for s in services
         ],
+        "completed_services_count": completed_count,
     }
 
 
@@ -692,7 +693,15 @@ async def get_public_establishment(establishment_id: UUID, db: AsyncSession = De
     )
     services = list(services_result.scalars().all())
 
-    return _public_establishment_out(establishment, services)
+    completed_count_result = await db.execute(
+        select(func.count()).select_from(ProAppointment).where(
+            ProAppointment.establishment_id == establishment_id,
+            ProAppointment.status == "concluido",
+        )
+    )
+    completed_count = completed_count_result.scalar_one()
+
+    return _public_establishment_out(establishment, services, completed_count)
 
 
 # ── Clients ──────────────────────────────────────────────────────────────
