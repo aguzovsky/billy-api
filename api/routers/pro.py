@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,24 @@ ESTABLISHMENT_TYPES = ["clinica", "petshop", "hotel", "daycare", "autonomo", "mi
 PET_SPECIES = ["dog", "cat"]  # igual ao Billy App
 PET_APPROXIMATE_AGES = ["puppy", "young", "adult", "senior"]
 PET_GENDERS = ["male", "female", "unknown"]
+
+
+def _validate_species(v: str) -> str:
+    if v not in PET_SPECIES:
+        raise ValueError(f"species deve ser um de: {', '.join(PET_SPECIES)}")
+    return v
+
+
+def _validate_approximate_age(v: Optional[str]) -> Optional[str]:
+    if v is not None and v not in PET_APPROXIMATE_AGES:
+        raise ValueError(f"approximate_age deve ser um de: {', '.join(PET_APPROXIMATE_AGES)}")
+    return v
+
+
+def _validate_gender(v: Optional[str]) -> Optional[str]:
+    if v is not None and v not in PET_GENDERS:
+        raise ValueError(f"gender deve ser um de: {', '.join(PET_GENDERS)}")
+    return v
 
 
 def _check_breed(species: str, breed: Optional[str]) -> None:
@@ -187,23 +205,68 @@ class PetCreate(BaseModel):
     @field_validator("species")
     @classmethod
     def species_valid(cls, v: str) -> str:
-        if v not in PET_SPECIES:
-            raise ValueError(f"species deve ser um de: {', '.join(PET_SPECIES)}")
-        return v
+        return _validate_species(v)
 
     @field_validator("approximate_age")
     @classmethod
     def approximate_age_valid(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in PET_APPROXIMATE_AGES:
-            raise ValueError(f"approximate_age deve ser um de: {', '.join(PET_APPROXIMATE_AGES)}")
-        return v
+        return _validate_approximate_age(v)
 
     @field_validator("gender")
     @classmethod
     def gender_valid(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in PET_GENDERS:
-            raise ValueError(f"gender deve ser um de: {', '.join(PET_GENDERS)}")
-        return v
+        return _validate_gender(v)
+
+
+# BIL-40: mesmo shape de PetCreate/ClientCreate, sem client_id (o cliente
+# ainda não existe no momento em que a linha da planilha é parseada) e sem
+# pets aninhados dentro de BulkPetInput (fica em BulkClientInput.pets).
+# Validators reaproveitados via as mesmas funções soltas de cima — não
+# duplica a regra, só a declaração do campo (exigência do pydantic).
+class BulkPetInput(BaseModel):
+    name: str
+    species: str
+    breed: Optional[str] = None
+    approximate_age: Optional[str] = None
+    color: Optional[str] = None
+    gender: Optional[str] = "unknown"
+    special_characteristics: Optional[str] = None
+    weight: Optional[str] = None
+
+    @field_validator("species")
+    @classmethod
+    def species_valid(cls, v: str) -> str:
+        return _validate_species(v)
+
+    @field_validator("approximate_age")
+    @classmethod
+    def approximate_age_valid(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_approximate_age(v)
+
+    @field_validator("gender")
+    @classmethod
+    def gender_valid(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_gender(v)
+
+
+class BulkClientInput(BaseModel):
+    name: str
+    contact_phone: Optional[str] = None
+    document: Optional[str] = None
+    neighborhood: Optional[str] = None
+    notes: Optional[str] = None
+    # Não valida aqui dentro — ver bulk_import_clients: cada pet é
+    # construído/validado individualmente dentro do loop, pra um pet
+    # inválido não derrubar a importação inteira.
+
+
+# Corpo frouxo de propósito (list[dict], não list[BulkClientInput]) — se
+# fosse tipado direto, o FastAPI validaria o payload inteiro antes de
+# chamar o endpoint, e qualquer item inválido em qualquer lugar do array
+# devolveria 422 pro corpo inteiro, sem nunca rodar o loop item a item que
+# permite "importa o que deu certo, reporta o resto".
+class BulkImportRequest(BaseModel):
+    clients: list[dict]
 
 
 class PetOut(BaseModel):
@@ -721,24 +784,111 @@ async def list_clients(
     return [_client_out(c) for c in result.scalars().all()]
 
 
+def _build_client(establishment_id: str, data) -> ProClient:
+    """Constrói (sem persistir) um ProClient a partir de qualquer objeto com
+    os campos name/contact_phone/document/neighborhood/notes — usado tanto
+    pelo create_client quanto pelo loop do bulk-import, mesmo shape de
+    campos (ClientCreate e BulkClientInput)."""
+    return ProClient(
+        establishment_id=UUID(establishment_id),
+        name=data.name,
+        contact_phone=data.contact_phone,
+        document=data.document,
+        neighborhood=data.neighborhood,
+        notes=data.notes,
+    )
+
+
+def _build_pet(client_id: str, establishment_id: str, data) -> ProPet:
+    """Mesma ideia de _build_client, pro pet — client_id vem à parte porque
+    PetCreate tem esse campo mas BulkPetInput não (o cliente ainda não
+    existe no momento em que a linha da planilha é parseada)."""
+    return ProPet(
+        client_id=UUID(client_id),
+        establishment_id=UUID(establishment_id),
+        name=data.name,
+        species=data.species,
+        breed=data.breed,
+        approximate_age=data.approximate_age,
+        color=data.color,
+        gender=data.gender,
+        special_characteristics=data.special_characteristics,
+        weight=data.weight,
+    )
+
+
 @router.post("/clients", status_code=status.HTTP_201_CREATED, summary="Criar cliente")
 async def create_client(
     body: ClientCreate,
     db: AsyncSession = Depends(get_db),
     establishment_id: str = Depends(get_current_establishment_id),
 ):
-    client = ProClient(
-        establishment_id=UUID(establishment_id),
-        name=body.name,
-        contact_phone=body.contact_phone,
-        document=body.document,
-        neighborhood=body.neighborhood,
-        notes=body.notes,
-    )
+    client = _build_client(establishment_id, body)
     db.add(client)
     await db.commit()
     await db.refresh(client)
     return _client_out(client)
+
+
+MAX_BULK_IMPORT_CLIENTS = 500
+
+
+@router.post("/clients/bulk-import", summary="Importar clientes em lote (BIL-40)")
+async def bulk_import_clients(
+    body: BulkImportRequest,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    if len(body.clients) > MAX_BULK_IMPORT_CLIENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Máximo de {MAX_BULK_IMPORT_CLIENTS} clientes por importação. Divida o arquivo em partes menores.",
+        )
+
+    results = []
+    for index, raw_client in enumerate(body.clients):
+        # Captura qualquer formato inesperado de linha (não só erro de
+        # validação de campo) — uma linha malformada não pode derrubar a
+        # importação inteira, é exatamente o problema que esse desenho evita.
+        if not isinstance(raw_client, dict):
+            results.append({"index": index, "ok": False, "name": "(formato inválido)", "error": "cada cliente deve ser um objeto"})
+            continue
+
+        raw_pets = raw_client.get("pets", []) or []
+        name_for_error = raw_client.get("name", "(sem nome)")
+
+        try:
+            client_input = BulkClientInput(**{k: v for k, v in raw_client.items() if k != "pets"})
+        except Exception as e:
+            results.append({"index": index, "ok": False, "name": name_for_error, "error": str(e)})
+            continue
+
+        client = _build_client(establishment_id, client_input)
+        db.add(client)
+        await db.flush()  # popula client.id sem commitar ainda — commit só no fim, depois dos pets
+
+        pet_results = []
+        for raw_pet in raw_pets:
+            pet_name_for_error = raw_pet.get("name", "(sem nome)") if isinstance(raw_pet, dict) else "(sem nome)"
+            try:
+                if not isinstance(raw_pet, dict):
+                    raise ValueError("cada pet deve ser um objeto")
+                pet_input = BulkPetInput(**raw_pet)
+            except Exception as e:
+                pet_results.append({"ok": False, "name": pet_name_for_error, "error": str(e)})
+                continue
+
+            _check_breed(pet_input.species, pet_input.breed)
+            pet = _build_pet(str(client.id), establishment_id, pet_input)
+            db.add(pet)
+            await db.flush()  # popula pet.id pro relatório, sem commitar ainda
+            pet_results.append({"ok": True, "pet_id": str(pet.id), "name": pet.name})
+
+        await db.commit()
+        await db.refresh(client)
+        results.append({"index": index, "ok": True, "client_id": str(client.id), "name": client.name, "pets": pet_results})
+
+    return {"results": results}
 
 
 @router.get("/clients/{client_id}", summary="Detalhe do cliente com pets")
@@ -815,18 +965,7 @@ async def create_pet(
     await _get_client(UUID(body.client_id), establishment_id, db)
     _check_breed(body.species, body.breed)
 
-    pet = ProPet(
-        client_id=UUID(body.client_id),
-        establishment_id=UUID(establishment_id),
-        name=body.name,
-        species=body.species,
-        breed=body.breed,
-        approximate_age=body.approximate_age,
-        color=body.color,
-        gender=body.gender,
-        special_characteristics=body.special_characteristics,
-        weight=body.weight,
-    )
+    pet = _build_pet(body.client_id, establishment_id, body)
     db.add(pet)
     await db.commit()
     await db.refresh(pet)
