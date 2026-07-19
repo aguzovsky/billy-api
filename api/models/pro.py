@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
@@ -110,6 +110,26 @@ class ProPet(Base):
 
     client = relationship("ProClient", back_populates="pets")
     appointments = relationship("ProAppointment", back_populates="pet", cascade="all, delete-orphan")
+    guardians = relationship("ProPetGuardian", back_populates="pet", cascade="all, delete-orphan")
+
+
+# BIL-95 — guarda compartilhada no Pro. pro_pets.client_id continua o dono
+# principal (zero mudança nele); essa tabela só guarda guardiões ADICIONAIS.
+# Diferente de pet_guardians (Billy App): sem fluxo de convite por email/
+# pending/accepted — aqui o próprio profissional administra direto, faz
+# sentido pra quem gerencia o cadastro, não pro guardião sendo convidado.
+class ProPetGuardian(Base):
+    __tablename__ = "pro_pet_guardians"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pet_id = Column(UUID(as_uuid=True), ForeignKey("pro_pets.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("pro_clients.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (UniqueConstraint("pet_id", "client_id", name="uq_pro_pet_guardians_pet_client"),)
+
+    pet = relationship("ProPet", back_populates="guardians")
+    client = relationship("ProClient")
 
 
 class ProAppointment(Base):

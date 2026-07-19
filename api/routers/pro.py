@@ -24,6 +24,7 @@ from api.models.pro import (
     ProAppointment,
     ProClient,
     ProPet,
+    ProPetGuardian,
     ProReminder,
     ProService,
     ProSubscription,
@@ -296,6 +297,15 @@ class PetUpdate(BaseModel):
     weight: Optional[str] = None
 
 
+# BIL-95 — guarda compartilhada no Pro.
+class AddGuardianInput(BaseModel):
+    client_id: str
+
+
+class PromoteOwnerInput(BaseModel):
+    client_id: str
+
+
 class AppointmentCreate(BaseModel):
     client_id: str
     pet_id: str
@@ -452,6 +462,17 @@ def _pet_out(p: ProPet) -> dict:
     }
 
 
+def _guardian_out(g: ProPetGuardian, client: ProClient) -> dict:
+    return {
+        "id": str(g.id),
+        "pet_id": str(g.pet_id),
+        "client_id": str(g.client_id),
+        "client_name": client.name,
+        "client_phone": client.contact_phone,
+        "created_at": g.created_at.isoformat(),
+    }
+
+
 def _appointment_out(a: ProAppointment) -> dict:
     return {
         "id": str(a.id),
@@ -537,6 +558,19 @@ async def _get_pet(pet_id: UUID, establishment_id: str, db: AsyncSession) -> Pro
     if pet is None:
         raise HTTPException(status_code=404, detail="Pet não encontrado")
     return pet
+
+
+async def _get_pet_guardian(pet_id: UUID, client_id: UUID, db: AsyncSession) -> ProPetGuardian:
+    result = await db.execute(
+        select(ProPetGuardian).where(
+            ProPetGuardian.pet_id == pet_id,
+            ProPetGuardian.client_id == client_id,
+        )
+    )
+    guardian = result.scalar_one_or_none()
+    if guardian is None:
+        raise HTTPException(status_code=404, detail="Guardião não encontrado para este pet")
+    return guardian
 
 
 async def _get_appointment(appointment_id: UUID, establishment_id: str, db: AsyncSession) -> ProAppointment:
@@ -1020,8 +1054,114 @@ async def delete_pet(
     establishment_id: str = Depends(get_current_establishment_id),
 ):
     pet = await _get_pet(pet_id, establishment_id, db)
+
+    # BIL-95: pet com guardiões ativos não pode ser apagado direto — precisa
+    # remover os guardiões primeiro, ou promover um deles a dono (endpoint
+    # promote-owner) antes de tentar de novo.
+    guardians_result = await db.execute(
+        select(ProPetGuardian).where(ProPetGuardian.pet_id == pet_id)
+    )
+    if guardians_result.scalars().first() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Pet tem guardiões ativos. Remova os guardiões ou promova um deles a dono antes de apagar.",
+        )
+
     await db.delete(pet)
     await db.commit()
+
+
+# ── Guarda compartilhada (BIL-95) ──────────────────────────────────────────
+
+
+@router.get("/pets/{pet_id}/guardians", summary="Listar guardiões de um pet")
+async def list_pet_guardians(
+    pet_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    await _get_pet(pet_id, establishment_id, db)
+    result = await db.execute(
+        select(ProPetGuardian, ProClient)
+        .join(ProClient, ProPetGuardian.client_id == ProClient.id)
+        .where(ProPetGuardian.pet_id == pet_id)
+    )
+    return [_guardian_out(g, c) for g, c in result.all()]
+
+
+@router.post("/pets/{pet_id}/guardians", status_code=status.HTTP_201_CREATED, summary="Adicionar guardião extra a um pet")
+async def add_pet_guardian(
+    pet_id: UUID,
+    body: AddGuardianInput,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    pet = await _get_pet(pet_id, establishment_id, db)
+    client = await _get_client(UUID(body.client_id), establishment_id, db)
+
+    if client.id == pet.client_id:
+        raise HTTPException(status_code=400, detail="Este cliente já é o dono principal do pet")
+
+    existing = await db.execute(
+        select(ProPetGuardian).where(
+            ProPetGuardian.pet_id == pet_id,
+            ProPetGuardian.client_id == client.id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Este cliente já é guardião deste pet")
+
+    guardian = ProPetGuardian(pet_id=pet_id, client_id=client.id)
+    db.add(guardian)
+    await db.commit()
+    await db.refresh(guardian)
+    return _guardian_out(guardian, client)
+
+
+@router.delete("/pets/{pet_id}/guardians/{client_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remover guardião de um pet")
+async def remove_pet_guardian(
+    pet_id: UUID,
+    client_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    await _get_pet(pet_id, establishment_id, db)
+    guardian = await _get_pet_guardian(pet_id, client_id, db)
+    await db.delete(guardian)
+    await db.commit()
+
+
+@router.patch("/pets/{pet_id}/promote-owner", summary="Trocar o dono principal de um pet")
+async def promote_pet_owner(
+    pet_id: UUID,
+    body: PromoteOwnerInput,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    pet = await _get_pet(pet_id, establishment_id, db)
+    new_owner_id = UUID(body.client_id)
+
+    if new_owner_id == pet.client_id:
+        raise HTTPException(status_code=400, detail="Este cliente já é o dono principal do pet")
+
+    # Novo dono precisa já ser guardião — este endpoint troca papel entre
+    # quem já está ligado ao pet, não adiciona gente nova (isso é o POST
+    # /guardians, chamado antes se for o caso).
+    guardian = await _get_pet_guardian(pet_id, new_owner_id, db)
+
+    pet.client_id = new_owner_id
+    await db.delete(guardian)  # quem virou dono não é mais "guardião" à parte
+
+    # Dono antigo NÃO vira guardião automaticamente. Este endpoint existe pro
+    # fluxo "promove outro, depois remove esse tutor": delete_pet bloqueia
+    # enquanto o pet tiver guardiões (ver acima); depois de promovido, o
+    # dono antigo não é mais nem dono nem guardião desse pet específico, e
+    # o delete_client (removendo o cliente antigo) segue livre em relação a
+    # ele — sem deixar guardião órfão apontando pra um cliente que está
+    # prestes a ser removido.
+    await db.commit()
+    await db.refresh(pet)
+    return _pet_out(pet)
 
 
 # ── Appointments ─────────────────────────────────────────────────────────
