@@ -1074,6 +1074,24 @@ async def delete_pet(
 # ── Guarda compartilhada (BIL-95) ──────────────────────────────────────────
 
 
+@router.get("/pet-guardians", summary="Listar todos os vínculos de guarda do estabelecimento")
+async def list_all_pet_guardians(
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    # Usado pelo frontend pra montar a lista de Clientes (um cliente precisa
+    # aparecer com os pets onde é dono OU guardião) — uma chamada só pro
+    # estabelecimento inteiro, não N+1 por pet. Payload mínimo de propósito
+    # (só os IDs) — o frontend já tem nome/telefone/etc. via GET /clients e
+    # GET /pets/{client_id}, não precisa duplicar aqui.
+    result = await db.execute(
+        select(ProPetGuardian)
+        .join(ProPet, ProPetGuardian.pet_id == ProPet.id)
+        .where(ProPet.establishment_id == UUID(establishment_id))
+    )
+    return [{"pet_id": str(g.pet_id), "client_id": str(g.client_id)} for g in result.scalars().all()]
+
+
 @router.get("/pets/{pet_id}/guardians", summary="Listar guardiões de um pet")
 async def list_pet_guardians(
     pet_id: UUID,
@@ -1149,16 +1167,19 @@ async def promote_pet_owner(
     # /guardians, chamado antes se for o caso).
     guardian = await _get_pet_guardian(pet_id, new_owner_id, db)
 
+    old_owner_id = pet.client_id
     pet.client_id = new_owner_id
     await db.delete(guardian)  # quem virou dono não é mais "guardião" à parte
 
-    # Dono antigo NÃO vira guardião automaticamente. Este endpoint existe pro
-    # fluxo "promove outro, depois remove esse tutor": delete_pet bloqueia
-    # enquanto o pet tiver guardiões (ver acima); depois de promovido, o
-    # dono antigo não é mais nem dono nem guardião desse pet específico, e
-    # o delete_client (removendo o cliente antigo) segue livre em relação a
-    # ele — sem deixar guardião órfão apontando pra um cliente que está
-    # prestes a ser removido.
+    # Dono antigo SEMPRE vira guardião — comportamento único e previsível,
+    # sem branch condicional aqui dentro. Quem chama este endpoint no fluxo
+    # de deletar cliente (ResolveGuardiansModal, no frontend) é responsável
+    # por remover esse vínculo logo em seguida, via DELETE
+    # /pets/{id}/guardians/{client_id}, já que aquele cliente está prestes a
+    # ser removido de verdade — a decisão de limpar ou não fica em quem
+    # chama, não escondida aqui.
+    db.add(ProPetGuardian(pet_id=pet_id, client_id=old_owner_id))
+
     await db.commit()
     await db.refresh(pet)
     return _pet_out(pet)
