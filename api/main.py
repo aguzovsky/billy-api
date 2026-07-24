@@ -26,10 +26,19 @@ from api.models import consent as _consent_model  # noqa: F401 — registers Use
 from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify, pet_registrations
 from api.routers import pro
 
+# BIL-100 — projeto "billy-api" na org billy-app (Sentry), cobre todo o
+# backend (Billy App consumer + Billy Pro juntos, sem separação por produto
+# aqui — quem lê o erro distingue pela rota: /api/v1/pro/* é Pro, o resto é
+# App). send_default_pii=False (decisão revista — nada de IP/headers/corpo
+# de requisição automático). Rastreabilidade de qual estabelecimento teve o
+# erro vem de sentry_sdk.set_user({"id": establishment_id}) em
+# get_current_establishment_id (api/core/security.py) — só o ID, chamado em
+# toda requisição autenticada de /pro/*, sem nome/telefone/CPF.
 sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN", "https://80417d985fc75686827188afff05bce0@o4511469145423873.ingest.us.sentry.io/4511469149945856"),
+    dsn=os.getenv("SENTRY_DSN", "https://467f06fe16bf1e0e544bc87c2adea7f8@o4511469145423873.ingest.us.sentry.io/4511791475458048"),
     environment=os.getenv("ENVIRONMENT", "production"),
     traces_sample_rate=0.1,
+    send_default_pii=False,
 )
 
 logging.basicConfig(

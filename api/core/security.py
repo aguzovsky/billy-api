@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import sentry_sdk
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, Response, status
@@ -57,6 +58,12 @@ async def get_current_establishment_id(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token não pertence a um estabelecimento")
 
     establishment_id = payload["sub"]
+
+    # BIL-100: identifica no Sentry só o ID (sem nome/telefone/CPF, sem
+    # send_default_pii — ver api/main.py) — roda em toda requisição
+    # autenticada de /pro/*, já que este dependency é o ponto único por onde
+    # todas elas passam.
+    sentry_sdk.set_user({"id": establishment_id})
 
     # Sessão deslizante: toda chamada autenticada de sucesso renova o token (só
     # expira de vez após pro_access_token_expire_minutes de inatividade real).
