@@ -176,6 +176,7 @@ class EstablishmentOut(BaseModel):
     tags: list[str]
     opening_hours: Optional[str]
     is_email_verified: bool
+    onboarding_completed: bool
     created_at: str
 
 
@@ -189,6 +190,7 @@ class EstablishmentUpdate(BaseModel):
     description: Optional[str] = None
     tags: Optional[list[str]] = None
     opening_hours: Optional[str] = None
+    onboarding_completed: Optional[bool] = None
 
     @field_validator("type")
     @classmethod
@@ -465,6 +467,7 @@ def _establishment_out(e: Establishment) -> dict:
         "opening_hours": e.opening_hours,
         "photo_url": e.photo_url,
         "is_email_verified": e.is_email_verified,
+        "onboarding_completed": e.onboarding_completed,
         "created_at": e.created_at.isoformat(),
     }
 
@@ -748,6 +751,8 @@ async def update_me(
         establishment.tags = body.tags
     if body.opening_hours is not None:
         establishment.opening_hours = body.opening_hours
+    if body.onboarding_completed is not None:
+        establishment.onboarding_completed = body.onboarding_completed
 
     await db.commit()
     await db.refresh(establishment)

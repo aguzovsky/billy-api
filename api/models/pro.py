@@ -27,6 +27,9 @@ class Establishment(Base):
     photo_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     is_email_verified = Column(Boolean, nullable=False, default=False)
+    # BIL-101 — onboarding guiado (4 slides, só track autônomo por enquanto).
+    # Dispara no Dashboard enquanto False; PATCH /pro/auth/me marca True.
+    onboarding_completed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True),
                         default=lambda: datetime.now(timezone.utc),
