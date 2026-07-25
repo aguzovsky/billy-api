@@ -84,6 +84,45 @@ def _check_not_past(date_str: str, time_str: str) -> None:
         raise HTTPException(status_code=422, detail="Não é possível agendar para uma data/hora que já passou.")
 
 
+# BIL-91 (revisado) — espelha PLANS[].limits.servicesPerDay em
+# billy-pro/src/data/plans.ts. Sem fonte única compartilhada entre os dois
+# repos (TS front / Python back) — mudar o limite de um plano precisa
+# atualizar os dois lados. Plano ausente daqui = sem limite de serviços/dia
+# (Matilha, todo Track B).
+PLAN_SERVICES_PER_DAY: dict[str, int] = {
+    "latido": 2,
+    "corrida": 3,
+}
+
+
+async def _check_services_per_day_limit(establishment_id: str, date_str: str, db: AsyncSession) -> None:
+    """Bloqueia criar um agendamento se o plano atual tem servicesPerDay
+    definido e a conta já atingiu o limite NAQUELE dia (campo `date`, que já
+    é a data local do estabelecimento — mesma convenção de _check_not_past,
+    nunca UTC do servidor). Cancelado não conta pro limite: quem cancelou
+    liberou a vaga daquele dia."""
+    sub_result = await db.execute(
+        select(ProSubscription).where(ProSubscription.establishment_id == UUID(establishment_id))
+    )
+    subscription = sub_result.scalar_one_or_none()
+    limit = PLAN_SERVICES_PER_DAY.get(subscription.plan_id) if subscription else None
+    if limit is None:
+        return
+
+    count_result = await db.execute(
+        select(func.count()).select_from(ProAppointment).where(
+            ProAppointment.establishment_id == UUID(establishment_id),
+            ProAppointment.date == date_str,
+            ProAppointment.status != "cancelado",
+        )
+    )
+    if count_result.scalar_one() >= limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Limite de {limit} serviços por dia do plano {subscription.plan_id.capitalize()} atingido. Faça upgrade para continuar.",
+        )
+
+
 def _validate_password_strength(password: str) -> str:
     """Valida força da senha: mín. 8 chars, 1 maiúscula, 1 número."""
     if len(password) < 8:
@@ -1214,6 +1253,7 @@ async def create_appointment(
     await _get_client(UUID(body.client_id), establishment_id, db)
     await _get_pet(UUID(body.pet_id), establishment_id, db)
     _check_not_past(body.date, body.time)
+    await _check_services_per_day_limit(establishment_id, body.date, db)
 
     appointment = ProAppointment(
         establishment_id=UUID(establishment_id),
