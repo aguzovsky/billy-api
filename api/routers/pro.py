@@ -30,6 +30,7 @@ from api.models.pro import (
     ProAppointment,
     ProClient,
     ProConnectInvite,
+    ProFeedback,
     ProPet,
     ProPetGuardian,
     ProReminder,
@@ -1722,5 +1723,40 @@ async def support_contact(
         except Exception as e:
             logger.warning("support contact email failed: %s", e)
             raise HTTPException(status_code=502, detail="Não foi possível enviar sua mensagem. Tente novamente.")
+
+    return {"ok": True}
+
+
+# ── Avaliação / feedback — BIL-103 ───────────────────────────────────────
+# TODO(BIL-103): trigger de reforço — pedir avaliação depois do 5º
+# agendamento concluído. Só a ideia registrada, não implementado ainda
+# (fora de escopo do MVP).
+
+
+class FeedbackBody(BaseModel):
+    rating: int
+    comment: Optional[str] = None
+
+    @field_validator("rating")
+    @classmethod
+    def rating_in_range(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError("rating deve ser entre 1 e 5")
+        return v
+
+
+@router.post("/feedback", status_code=status.HTTP_201_CREATED, summary="Enviar avaliação do Billy Pro")
+async def create_feedback(
+    body: FeedbackBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    feedback = ProFeedback(
+        establishment_id=UUID(establishment_id),
+        rating=body.rating,
+        comment=body.comment.strip() if body.comment else None,
+    )
+    db.add(feedback)
+    await db.commit()
 
     return {"ok": True}

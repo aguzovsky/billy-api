@@ -161,6 +161,22 @@ class ProConnectInvite(Base):
     establishment = relationship("Establishment")
 
 
+# BIL-103 — avaliação/feedback do Pro (MVP). Sem coluna de environment
+# de propósito — staging e produção são bancos fisicamente separados,
+# a coluna seria redundante.
+class ProFeedback(Base):
+    __tablename__ = "pro_feedback"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    establishment_id = Column(UUID(as_uuid=True), ForeignKey("establishments.id", ondelete="CASCADE"),
+                               nullable=False)
+    rating = Column(Integer, nullable=False)  # 1-5, validado no router
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    establishment = relationship("Establishment")
+
+
 class ProAppointment(Base):
     __tablename__ = "pro_appointments"
 
