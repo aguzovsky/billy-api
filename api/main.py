@@ -25,6 +25,7 @@ from api.models import health as _health_model  # noqa: F401 — registers Healt
 from api.models import consent as _consent_model  # noqa: F401 — registers UserConsent with Base
 from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify, pet_registrations
 from api.routers import pro
+from api.routers import billy_connect
 
 # BIL-100 — projeto "billy-api" na org billy-app (Sentry), cobre todo o
 # backend (Billy App consumer + Billy Pro juntos, sem separação por produto
@@ -91,6 +92,7 @@ app.include_router(consents.router, prefix=API_PREFIX)
 app.include_router(notify.router, prefix=API_PREFIX)
 app.include_router(pet_registrations.router, prefix=API_PREFIX)
 app.include_router(pro.router, prefix=API_PREFIX)
+app.include_router(billy_connect.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)

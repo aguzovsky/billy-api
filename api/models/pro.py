@@ -135,6 +135,32 @@ class ProPetGuardian(Base):
     client = relationship("ProClient")
 
 
+# BIL-39 — Billy Connect. Ponte real entre um pro_pet/pro_client já
+# cadastrado no Pro e o usuário/pet correspondente no Billy App, via
+# push nativo (sem QR code). app_user_id/app_pet_id ficam sem FK de
+# propósito — cruzam pro Base do App (users/pets), mesmo padrão já
+# usado em ProPet.billy_pet_id / ProClient.billy_user_id, que também
+# não têm FK. app_pet_id só é preenchido no accept, quando o tutor
+# escolhe qual pet é (pode ter mais de um cadastrado no App).
+class ProConnectInvite(Base):
+    __tablename__ = "pro_connect_invites"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pro_pet_id = Column(UUID(as_uuid=True), ForeignKey("pro_pets.id", ondelete="CASCADE"), nullable=False)
+    pro_client_id = Column(UUID(as_uuid=True), ForeignKey("pro_clients.id", ondelete="CASCADE"), nullable=False)
+    establishment_id = Column(UUID(as_uuid=True), ForeignKey("establishments.id", ondelete="CASCADE"),
+                               nullable=False)
+    app_user_id = Column(UUID(as_uuid=True), nullable=True)
+    app_pet_id = Column(UUID(as_uuid=True), nullable=True)
+    status = Column(String(20), nullable=False, default="pending")  # 'pending'|'confirmed'|'declined'|'expired'
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    pro_pet = relationship("ProPet")
+    pro_client = relationship("ProClient")
+    establishment = relationship("Establishment")
+
+
 class ProAppointment(Base):
     __tablename__ = "pro_appointments"
 

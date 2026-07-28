@@ -1,11 +1,15 @@
+import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import firebase_admin
 import httpx
+from firebase_admin import credentials, messaging
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 from sqlalchemy import func, select
@@ -20,10 +24,12 @@ from api.core.security import (
     verify_password,
 )
 from api.data.pet_breeds import BREEDS_BY_SPECIES
+from api.models.pet import User
 from api.models.pro import (
     Establishment,
     ProAppointment,
     ProClient,
+    ProConnectInvite,
     ProPet,
     ProPetGuardian,
     ProReminder,
@@ -1519,6 +1525,139 @@ async def billy_connect_pet(
             "contact_phone": client.contact_phone if client else None,
         },
     }
+
+
+_firebase_initialized = False
+
+
+def _get_firebase():
+    global _firebase_initialized
+    if _firebase_initialized:
+        return True
+    try:
+        firebase_admin.get_app()
+        _firebase_initialized = True
+        return True
+    except ValueError:
+        pass  # not initialized yet
+    creds_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT", "")
+    if not creds_json:
+        return False
+    try:
+        cred = credentials.Certificate(json.loads(creds_json))
+        firebase_admin.initialize_app(cred)
+        _firebase_initialized = True
+        return True
+    except Exception as e:
+        logger.warning("Firebase init failed in pro: %s", e)
+        return False
+
+
+def _normalize_phone(phone: Optional[str]) -> str:
+    if not phone:
+        return ""
+    digits = re.sub(r"\D", "", phone)
+    # remove DDI 55 quando presente, pra tolerar formatos com/sem código
+    # de país batendo entre o cadastro do Pro e o cadastro do App
+    if digits.startswith("55") and len(digits) > 11:
+        digits = digits[2:]
+    return digits
+
+
+class BillyConnectRequestBody(BaseModel):
+    pro_pet_id: str
+
+
+@router.post(
+    "/billy-connect/request",
+    status_code=status.HTTP_201_CREATED,
+    summary="Solicitar conexão Billy Connect (push nativo pro tutor confirmar)",
+)
+async def billy_connect_request(
+    body: BillyConnectRequestBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    try:
+        pro_pet_uuid = UUID(body.pro_pet_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="pro_pet_id inválido")
+
+    pet_result = await db.execute(
+        select(ProPet).where(ProPet.id == pro_pet_uuid, ProPet.establishment_id == UUID(establishment_id))
+    )
+    pet = pet_result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet não encontrado")
+
+    if pet.billy_pet_id is not None:
+        raise HTTPException(status_code=409, detail="Este pet já está conectado ao Billy App")
+
+    client_result = await db.execute(select(ProClient).where(ProClient.id == pet.client_id))
+    client = client_result.scalar_one_or_none()
+    if client is None:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    client_phone = _normalize_phone(client.contact_phone)
+    if not client_phone:
+        raise HTTPException(status_code=404, detail="Cliente ainda não tem o Billy App")
+
+    # Reaproveita convite pendente e não-expirado já existente, em vez de
+    # empilhar convites/push duplicados a cada clique no botão.
+    existing_result = await db.execute(
+        select(ProConnectInvite).where(
+            ProConnectInvite.pro_pet_id == pro_pet_uuid,
+            ProConnectInvite.status == "pending",
+            ProConnectInvite.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    existing_invite = existing_result.scalar_one_or_none()
+    if existing_invite is not None:
+        return {"id": str(existing_invite.id), "status": existing_invite.status,
+                "expires_at": existing_invite.expires_at.isoformat()}
+
+    users_result = await db.execute(select(User).where(User.fcm_token.isnot(None)))
+    app_user = next(
+        (u for u in users_result.scalars().all() if _normalize_phone(u.contact_phone) == client_phone),
+        None,
+    )
+    if app_user is None:
+        raise HTTPException(status_code=404, detail="Cliente ainda não tem o Billy App")
+
+    establishment_result = await db.execute(
+        select(Establishment).where(Establishment.id == UUID(establishment_id))
+    )
+    establishment = establishment_result.scalar_one_or_none()
+
+    invite = ProConnectInvite(
+        pro_pet_id=pro_pet_uuid,
+        pro_client_id=client.id,
+        establishment_id=UUID(establishment_id),
+        app_user_id=app_user.id,
+        status="pending",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=48),
+    )
+    db.add(invite)
+    client.billy_profile_status = "convite_pendente"
+    await db.commit()
+    await db.refresh(invite)
+
+    if _get_firebase():
+        try:
+            messaging.send(
+                messaging.Message(
+                    notification=messaging.Notification(
+                        title=establishment.name if establishment else "Billy",
+                        body=f"quer conectar {pet.name} ao Billy. Toque para confirmar.",
+                    ),
+                    data={"type": "billy_connect_request", "invite_id": str(invite.id)},
+                    token=app_user.fcm_token,
+                )
+            )
+        except Exception as e:
+            logger.warning("FCM send failed (billy-connect): %s", e)
+
+    return {"id": str(invite.id), "status": invite.status, "expires_at": invite.expires_at.isoformat()}
 
 
 # ── Central de ajuda — BIL-102 ───────────────────────────────────────────
