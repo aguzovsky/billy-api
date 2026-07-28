@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 from sqlalchemy import func, select
@@ -1518,3 +1519,69 @@ async def billy_connect_pet(
             "contact_phone": client.contact_phone if client else None,
         },
     }
+
+
+# ── Central de ajuda — BIL-102 ───────────────────────────────────────────
+
+
+class SupportContactBody(BaseModel):
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def message_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Mensagem não pode ser vazia")
+        return v
+
+
+async def _send_support_email(establishment_name: str, establishment_email: str, message: str) -> None:
+    html_body = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;color:#3D2314;">
+      <div style="background:#C98A4B;padding:16px 20px;border-radius:12px 12px 0 0;">
+        <span style="color:white;font-size:18px;font-weight:800;">🐾 billy pro — central de ajuda</span>
+      </div>
+      <div style="background:#FAF8F5;padding:24px 20px;border-radius:0 0 12px 12px;border:1px solid #EDE5DB;border-top:none;">
+        <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+          <tr><td style="padding:6px 0;color:#8B6F5E;font-size:13px;width:90px;">Estabelecimento</td><td style="font-weight:700;">{establishment_name}</td></tr>
+          <tr><td style="padding:6px 0;color:#8B6F5E;font-size:13px;">E-mail</td><td style="font-weight:700;">{establishment_email}</td></tr>
+        </table>
+        <p style="color:#8B6F5E;font-size:13px;margin:0 0 6px;">Mensagem:</p>
+        <p style="white-space:pre-wrap;margin:0;">{message}</p>
+      </div>
+    </div>
+    """
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.resend_from_email,
+                "to": ["suporte@appbilly.com.br"],
+                "reply_to": establishment_email,
+                "subject": f"Dúvida — Central de Ajuda ({establishment_name})",
+                "html": html_body,
+            },
+            timeout=10,
+        )
+
+
+@router.post("/support/contact", summary="Enviar dúvida pra Central de Ajuda")
+async def support_contact(
+    body: SupportContactBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    if settings.resend_api_key:
+        try:
+            await _send_support_email(establishment.name, establishment.email, body.message)
+        except Exception as e:
+            logger.warning("support contact email failed: %s", e)
+            raise HTTPException(status_code=502, detail="Não foi possível enviar sua mensagem. Tente novamente.")
+
+    return {"ok": True}
