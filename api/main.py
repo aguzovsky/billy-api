@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.core.database import get_db
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
@@ -35,12 +36,19 @@ from api.routers import billy_connect
 # erro vem de sentry_sdk.set_user({"id": establishment_id}) em
 # get_current_establishment_id (api/core/security.py) — só o ID, chamado em
 # toda requisição autenticada de /pro/*, sem nome/telefone/CPF.
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN", "https://467f06fe16bf1e0e544bc87c2adea7f8@o4511469145423873.ingest.us.sentry.io/4511791475458048"),
-    environment=os.getenv("ENVIRONMENT", "production"),
-    traces_sample_rate=0.1,
-    send_default_pii=False,
-)
+#
+# BIL-104 parte 2: o `environment=` antigo lia uma env var (ENVIRONMENT) que
+# nunca era setada em lugar nenhum — sempre caía no default "production",
+# inclusive rodando local. Corrigido pra usar settings.app_env (a mesma
+# fonte que já distingue staging via APP_ENV no Railway). Em "development"
+# nem inicializa: dev local não deve gerar evento nenhum no Sentry.
+if settings.app_env != "development":
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN", "https://467f06fe16bf1e0e544bc87c2adea7f8@o4511469145423873.ingest.us.sentry.io/4511791475458048"),
+        environment=settings.app_env,
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
 
 logging.basicConfig(
     level=logging.INFO,

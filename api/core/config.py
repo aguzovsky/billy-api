@@ -9,7 +9,13 @@ class Settings(BaseSettings):
     )
 
     # Environment
-    app_env: str = "production"  # set APP_ENV=staging on Railway staging service
+    # Default "development" de propósito (BIL-104 parte 2) — sem isso local
+    # dev e produção eram indistinguíveis (nenhum dos dois setava a env var),
+    # o que fazia o Sentry marcar erro de teste local como produção. Staging
+    # seta APP_ENV=staging (Railway), produção agora precisa setar
+    # APP_ENV=production explicitamente — não dá mais pra confiar no default
+    # pra isso.
+    app_env: str = "development"
 
     # Database
     database_url: str = "postgresql+asyncpg://billy:billy@localhost/billy"
