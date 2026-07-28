@@ -20,6 +20,10 @@ class Establishment(Base):
     address = Column(String(255), nullable=True)
     neighborhood = Column(String(100), nullable=True)
     city = Column(String(100), nullable=True)
+    # BIL-45 — sem validação de dígito verificador (KYC de verdade é o BIL-46)
+    cnpj = Column(String(20), nullable=True)
+    cpf = Column(String(14), nullable=True)
+    cep = Column(String(10), nullable=True)
     description = Column(String(500), nullable=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
     # JSON string: {"monday": {"open": "08:00", "close": "19:00", "closed": false}, ...}

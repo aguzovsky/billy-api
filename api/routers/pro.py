@@ -180,6 +180,9 @@ class EstablishmentOut(BaseModel):
     address: Optional[str]
     neighborhood: Optional[str]
     city: Optional[str]
+    cnpj: Optional[str]
+    cpf: Optional[str]
+    cep: Optional[str]
     description: Optional[str]
     tags: list[str]
     opening_hours: Optional[str]
@@ -195,6 +198,9 @@ class EstablishmentUpdate(BaseModel):
     address: Optional[str] = None
     neighborhood: Optional[str] = None
     city: Optional[str] = None
+    cnpj: Optional[str] = None
+    cpf: Optional[str] = None
+    cep: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[list[str]] = None
     opening_hours: Optional[str] = None
@@ -470,6 +476,9 @@ def _establishment_out(e: Establishment) -> dict:
         "address": e.address,
         "neighborhood": e.neighborhood,
         "city": e.city,
+        "cnpj": e.cnpj,
+        "cpf": e.cpf,
+        "cep": e.cep,
         "description": e.description,
         "tags": e.tags or [],
         "opening_hours": e.opening_hours,
@@ -753,6 +762,12 @@ async def update_me(
         establishment.neighborhood = body.neighborhood
     if body.city is not None:
         establishment.city = body.city
+    if body.cnpj is not None:
+        establishment.cnpj = body.cnpj
+    if body.cpf is not None:
+        establishment.cpf = body.cpf
+    if body.cep is not None:
+        establishment.cep = body.cep
     if body.description is not None:
         establishment.description = body.description
     if body.tags is not None:
