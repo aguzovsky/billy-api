@@ -1771,9 +1771,11 @@ async def support_contact(
 
 
 # ── Avaliação / feedback — BIL-103 ───────────────────────────────────────
-# TODO(BIL-103): trigger de reforço — pedir avaliação depois do 5º
-# agendamento concluído. Só a ideia registrada, não implementado ainda
-# (fora de escopo do MVP).
+# Gatilho de reforço (pedir avaliação depois do 5º agendamento concluído)
+# implementado no frontend (useFeedbackPrompt) — a contagem em si vem dos
+# appointments já carregados, sem campo novo aqui. Esse GET só existe pra
+# responder "essa conta já avaliou alguma vez", que aí sim é fato do
+# backend (precisa valer em qualquer navegador/dispositivo).
 
 
 class FeedbackBody(BaseModel):
@@ -1786,6 +1788,21 @@ class FeedbackBody(BaseModel):
         if v < 1 or v > 5:
             raise ValueError("rating deve ser entre 1 e 5")
         return v
+
+
+@router.get("/feedback", summary="Confirmar se o estabelecimento já avaliou o Billy Pro")
+async def get_feedback_status(
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    # first(), não scalar_one_or_none() — não há unicidade em
+    # pro_feedback.establishment_id (nada impede mais de um envio), só
+    # importa se existe pelo menos um.
+    result = await db.execute(
+        select(ProFeedback.id).where(ProFeedback.establishment_id == UUID(establishment_id)).limit(1)
+    )
+    submitted = result.first() is not None
+    return {"submitted": submitted}
 
 
 @router.post("/feedback", status_code=status.HTTP_201_CREATED, summary="Enviar avaliação do Billy Pro")
