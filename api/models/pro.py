@@ -110,6 +110,7 @@ class ProPet(Base):
     weight = Column(String(20), nullable=True)
     billy_pet_id = Column(UUID(as_uuid=True), nullable=True)  # ponte futura com Pet do App
     biometry_status = Column(String(20), nullable=False, default="nao_registrada")  # 'registrada'|'nao_registrada'
+    photo_url = Column(String(500), nullable=True)  # BIL-98
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True),
                         default=lambda: datetime.now(timezone.utc),

@@ -517,6 +517,7 @@ def _pet_out(p: ProPet) -> dict:
         "weight": p.weight,
         "biometry_status": p.biometry_status,
         "billy_pet_id": str(p.billy_pet_id) if p.billy_pet_id else None,
+        "photo_url": p.photo_url,
         "created_at": p.created_at.isoformat(),
     }
 
@@ -1112,6 +1113,33 @@ async def update_pet(
     await db.commit()
     await db.refresh(pet)
     return _pet_out(pet)
+
+
+@router.patch("/pets/{pet_id}/photo", summary="Upload foto do pet")
+async def update_pet_photo(
+    pet_id: UUID,
+    photo: UploadFile = File(..., description="Foto do pet (JPG/PNG)"),
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    pet = await _get_pet(pet_id, establishment_id, db)
+
+    image_bytes = await photo.read()
+    max_bytes = settings.max_image_size_mb * 1024 * 1024
+    if len(image_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "IMAGE_TOO_LARGE", "message": f"Imagem maior que {settings.max_image_size_mb}MB"},
+        )
+
+    photo_url = await storage.upload_pro_pet_photo(image_bytes, photo.content_type or "image/jpeg")
+
+    if photo_url:
+        pet.photo_url = photo_url
+        await db.commit()
+        await db.refresh(pet)
+
+    return {"photo_url": pet.photo_url}
 
 
 @router.delete("/pets/{pet_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remover pet")
