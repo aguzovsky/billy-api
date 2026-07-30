@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
@@ -189,6 +190,8 @@ class EstablishmentOut(BaseModel):
     is_email_verified: bool
     onboarding_completed: bool
     kyc_status: str
+    terms_accepted_at: Optional[str]
+    terms_version: Optional[str]
     created_at: str
 
 
@@ -487,6 +490,8 @@ def _establishment_out(e: Establishment) -> dict:
         "is_email_verified": e.is_email_verified,
         "onboarding_completed": e.onboarding_completed,
         "kyc_status": e.kyc_status,
+        "terms_accepted_at": e.terms_accepted_at.isoformat() if e.terms_accepted_at else None,
+        "terms_version": e.terms_version,
         "created_at": e.created_at.isoformat(),
     }
 
@@ -855,7 +860,9 @@ async def get_public_establishment(establishment_id: UUID, db: AsyncSession = De
     # BIL-46 — sem KYC aprovado, o perfil não fica visível/agendável (risco:
     # golpe de roubo de pet via identidade falsa). Não é 404 — o perfil
     # existe, só está num estado temporário até a verificação terminar.
-    if establishment.kyc_status != "aprovado":
+    # BIL-44 — e-mail verificado é check adicional, mesmo gate (pode rodar
+    # em paralelo ao KYC, mas os dois precisam estar ok pro perfil abrir).
+    if establishment.kyc_status != "aprovado" or not establishment.is_email_verified:
         return {
             "id": str(establishment.id),
             "name": establishment.name,
@@ -1637,11 +1644,11 @@ async def billy_connect_request(
 ):
     # BIL-46 — mesmo gate do perfil público: convite pra tutor real só com
     # KYC aprovado (o próprio risco que motivou o KYC é golpe de identidade
-    # falsa via essa conexão).
+    # falsa via essa conexão). BIL-44 — e-mail verificado, mesmo gate.
     est_result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
     establishment = est_result.scalar_one_or_none()
-    if establishment is None or establishment.kyc_status != "aprovado":
-        raise HTTPException(status_code=403, detail="Verificação de identidade pendente. Complete o KYC pra conectar com tutores.")
+    if establishment is None or establishment.kyc_status != "aprovado" or not establishment.is_email_verified:
+        raise HTTPException(status_code=403, detail="Verificação de identidade pendente. Complete o KYC e confirme seu e-mail pra conectar com tutores.")
 
     try:
         pro_pet_uuid = UUID(body.pro_pet_id)
@@ -1929,6 +1936,144 @@ async def kyc_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         return {"ok": True}
 
     establishment.kyc_status = mapped_status
+    await db.commit()
+
+    return {"ok": True}
+
+
+# ── Termos e Privacidade — LGPD (BIL-46/parte-legal) ─────────────────────
+# KYC pede documento + biometria — LGPD exige consentimento específico e
+# destacado pra dado sensível (art. 11), separado do aceite geral. Por
+# isso o frontend manda os dois booleans aqui: se qualquer um vier False,
+# rejeita — não confia só em "a chamada foi feita" como prova de aceite.
+
+class TermsAcceptBody(BaseModel):
+    terms_version: str
+    accepted_terms: bool
+    accepted_biometric_consent: bool
+
+
+@router.post("/terms/accept", summary="Registrar aceite dos Termos de Uso e Política de Privacidade")
+async def accept_terms(
+    body: TermsAcceptBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    if not body.accepted_terms or not body.accepted_biometric_consent:
+        raise HTTPException(status_code=400, detail="É necessário aceitar os Termos e o consentimento de dado biométrico.")
+
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    establishment.terms_accepted_at = datetime.now(timezone.utc)
+    establishment.terms_version = body.terms_version
+    await db.commit()
+
+    return {"ok": True}
+
+
+# ── Verificação de e-mail — BIL-44 ───────────────────────────────────────
+# Código de 6 dígitos, não link (diferente do Billy App em auth.py) —
+# roda dentro do fluxo de completar perfil, sem precisar sair pro e-mail.
+# is_email_verified já existia (coluna morta até agora, sem endpoint).
+
+VERIFICATION_CODE_EXPIRE_MINUTES = 15
+VERIFICATION_RESEND_COOLDOWN_SECONDS = 60
+
+
+def _generate_verification_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+async def _send_verification_code_email(to_email: str, name: str, code: str) -> None:
+    if not settings.resend_api_key:
+        return
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.resend_from_email,
+                "to": [to_email],
+                "subject": "Seu código de confirmação — Billy Pro",
+                "html": (
+                    f"<p>Olá, {name}!</p>"
+                    f"<p>Seu código de confirmação é:</p>"
+                    f"<p style='font-size:28px;font-weight:800;letter-spacing:6px'>{code}</p>"
+                    f"<p>Válido por {VERIFICATION_CODE_EXPIRE_MINUTES} minutos.</p>"
+                    f"<p>Se você não pediu esse código, ignore este e-mail.</p>"
+                ),
+            },
+            timeout=10.0,
+        )
+
+
+@router.post("/auth/send-verification-code", summary="Enviar código de confirmação de e-mail")
+async def send_verification_code(
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    if establishment.is_email_verified:
+        return {"ok": True}
+
+    now = datetime.now(timezone.utc)
+    if establishment.email_verification_sent_at:
+        elapsed = (now - establishment.email_verification_sent_at).total_seconds()
+        if elapsed < VERIFICATION_RESEND_COOLDOWN_SECONDS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Aguarde {int(VERIFICATION_RESEND_COOLDOWN_SECONDS - elapsed)}s pra pedir outro código.",
+            )
+
+    code = _generate_verification_code()
+    establishment.email_verification_code = code
+    establishment.email_verification_code_expires = now + timedelta(minutes=VERIFICATION_CODE_EXPIRE_MINUTES)
+    establishment.email_verification_sent_at = now
+    await db.commit()
+
+    await _send_verification_code_email(establishment.email, establishment.name, code)
+
+    return {"ok": True}
+
+
+class VerifyEmailCodeBody(BaseModel):
+    code: str
+
+
+@router.post("/auth/verify-email-code", summary="Confirmar e-mail com código")
+async def verify_email_code(
+    body: VerifyEmailCodeBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    if establishment.is_email_verified:
+        return {"ok": True}
+
+    if (
+        not establishment.email_verification_code
+        or not establishment.email_verification_code_expires
+        or establishment.email_verification_code_expires < datetime.now(timezone.utc)
+    ):
+        raise HTTPException(status_code=400, detail="Código expirado. Peça um novo.")
+
+    if body.code.strip() != establishment.email_verification_code:
+        raise HTTPException(status_code=400, detail="Código incorreto.")
+
+    establishment.is_email_verified = True
+    establishment.email_verification_code = None
+    establishment.email_verification_code_expires = None
     await db.commit()
 
     return {"ok": True}

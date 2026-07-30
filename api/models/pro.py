@@ -31,6 +31,18 @@ class Establishment(Base):
     # que é o próprio establishment_id) e permite "tentar novamente" saber se
     # já existe sessão em aberto.
     kyc_session_id = Column(String(64), nullable=True)
+    # BIL-46/parte-legal — prova de consentimento LGPD (data + versão do
+    # texto aceito). Setado junto quando os dois checkboxes (termos+
+    # privacidade e consentimento biométrico) são marcados e o usuário
+    # avança pro KYC.
+    terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    terms_version = Column(String(20), nullable=True)
+    # BIL-44 — verificação de e-mail do Pro, código de 6 dígitos (não link
+    # como o Billy App usa em User — roda dentro do fluxo de completar
+    # perfil, sem sair pro e-mail). sent_at é só pro cooldown de reenvio.
+    email_verification_code = Column(String(6), nullable=True)
+    email_verification_code_expires = Column(DateTime(timezone=True), nullable=True)
+    email_verification_sent_at = Column(DateTime(timezone=True), nullable=True)
     description = Column(String(500), nullable=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
     # JSON string: {"monday": {"open": "08:00", "close": "19:00", "closed": false}, ...}
