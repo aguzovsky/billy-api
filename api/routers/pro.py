@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import firebase_admin
 import httpx
 from firebase_admin import credentials, messaging
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +37,7 @@ from api.models.pro import (
     ProService,
     ProSubscription,
 )
-from api.services import storage
+from api.services import storage, didit
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +188,7 @@ class EstablishmentOut(BaseModel):
     opening_hours: Optional[str]
     is_email_verified: bool
     onboarding_completed: bool
+    kyc_status: str
     created_at: str
 
 
@@ -485,6 +486,7 @@ def _establishment_out(e: Establishment) -> dict:
         "photo_url": e.photo_url,
         "is_email_verified": e.is_email_verified,
         "onboarding_completed": e.onboarding_completed,
+        "kyc_status": e.kyc_status,
         "created_at": e.created_at.isoformat(),
     }
 
@@ -850,6 +852,17 @@ async def get_public_establishment(establishment_id: UUID, db: AsyncSession = De
     if establishment is None:
         raise HTTPException(status_code=404, detail="Perfil não encontrado")
 
+    # BIL-46 — sem KYC aprovado, o perfil não fica visível/agendável (risco:
+    # golpe de roubo de pet via identidade falsa). Não é 404 — o perfil
+    # existe, só está num estado temporário até a verificação terminar.
+    if establishment.kyc_status != "aprovado":
+        return {
+            "id": str(establishment.id),
+            "name": establishment.name,
+            "photo_url": establishment.photo_url,
+            "public_status": "em_verificacao",
+        }
+
     services_result = await db.execute(
         select(ProService).where(
             ProService.establishment_id == establishment_id,
@@ -866,7 +879,7 @@ async def get_public_establishment(establishment_id: UUID, db: AsyncSession = De
     )
     completed_count = completed_count_result.scalar_one()
 
-    return _public_establishment_out(establishment, services, completed_count)
+    return {**_public_establishment_out(establishment, services, completed_count), "public_status": "disponivel"}
 
 
 # ── Clients ──────────────────────────────────────────────────────────────
@@ -1622,6 +1635,14 @@ async def billy_connect_request(
     db: AsyncSession = Depends(get_db),
     establishment_id: str = Depends(get_current_establishment_id),
 ):
+    # BIL-46 — mesmo gate do perfil público: convite pra tutor real só com
+    # KYC aprovado (o próprio risco que motivou o KYC é golpe de identidade
+    # falsa via essa conexão).
+    est_result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = est_result.scalar_one_or_none()
+    if establishment is None or establishment.kyc_status != "aprovado":
+        raise HTTPException(status_code=403, detail="Verificação de identidade pendente. Complete o KYC pra conectar com tutores.")
+
     try:
         pro_pet_uuid = UUID(body.pro_pet_id)
     except ValueError:
@@ -1817,6 +1838,97 @@ async def create_feedback(
         comment=body.comment.strip() if body.comment else None,
     )
     db.add(feedback)
+    await db.commit()
+
+    return {"ok": True}
+
+
+# ── KYC — BIL-46 (Didit) ─────────────────────────────────────────────────
+# Verificação de identidade (documento + prova de vida) antes do perfil
+# público ficar visível — risco identificado é golpe de roubo de pet via
+# identidade falsa, dano irreversível a um animal real, não só financeiro.
+# Não bloqueia o resto do app (dashboard/clientes/agenda seguem 100%
+# usáveis) — só a visibilidade pública (ver /public/establishments/{id}
+# e /billy-connect/request). Fonte de verdade do status é o webhook, não
+# polling — GET /kyc/status só lê o que já está gravado.
+
+class KycStartBody(BaseModel):
+    callback_url: str
+
+
+@router.post("/kyc/start", summary="Iniciar verificação de identidade (Didit)")
+async def kyc_start(
+    body: KycStartBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    try:
+        session = await didit.create_kyc_session(vendor_data=establishment_id, callback=body.callback_url)
+    except httpx.HTTPStatusError as e:
+        logger.error("Didit create-session falhou: %s — %s", e.response.status_code, e.response.text)
+        raise HTTPException(status_code=502, detail="Não foi possível iniciar a verificação. Tente novamente.")
+
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    establishment.kyc_session_id = session["session_id"]
+    establishment.kyc_status = "pendente"
+    await db.commit()
+
+    return {"url": session["url"]}
+
+
+@router.get("/kyc/status", summary="Status atual da verificação de identidade")
+async def kyc_status(
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+    return {"status": establishment.kyc_status}
+
+
+@router.post("/kyc/webhook", summary="Webhook do Didit — atualiza kyc_status")
+async def kyc_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    # Sem get_current_establishment_id de propósito — quem chama é o Didit,
+    # não um estabelecimento logado. Autenticação é a assinatura HMAC.
+    body_json = await request.json()
+    signature = request.headers.get("X-Signature-V2", "")
+    timestamp = request.headers.get("X-Timestamp", "")
+
+    if not didit.verify_webhook_signature(body_json, signature, timestamp):
+        raise HTTPException(status_code=401, detail="Assinatura inválida")
+
+    vendor_data = body_json.get("vendor_data")
+    didit_status = body_json.get("status")
+    if not vendor_data or not didit_status:
+        # Corpo sem os campos esperados — responde 200 mesmo assim (evita
+        # retry infinito do Didit por um payload que nunca vai mudar).
+        logger.warning("Webhook Didit sem vendor_data/status: %s", body_json)
+        return {"ok": True}
+
+    mapped_status = didit.DIDIT_STATUS_MAP.get(didit_status)
+    if mapped_status is None:
+        logger.warning("Webhook Didit com status desconhecido: %s", didit_status)
+        return {"ok": True}
+
+    try:
+        establishment_uuid = UUID(vendor_data)
+    except ValueError:
+        logger.warning("Webhook Didit com vendor_data inválido: %s", vendor_data)
+        return {"ok": True}
+
+    result = await db.execute(select(Establishment).where(Establishment.id == establishment_uuid))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        logger.warning("Webhook Didit — establishment não encontrado: %s", vendor_data)
+        return {"ok": True}
+
+    establishment.kyc_status = mapped_status
     await db.commit()
 
     return {"ok": True}

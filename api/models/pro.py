@@ -24,6 +24,13 @@ class Establishment(Base):
     cnpj = Column(String(20), nullable=True)
     cpf = Column(String(14), nullable=True)
     cep = Column(String(10), nullable=True)
+    # BIL-46 — KYC via Didit. 'nao_iniciado'|'pendente'|'aprovado'|'reprovado'.
+    # Fonte de verdade é o webhook (POST /pro/kyc/webhook), não polling.
+    kyc_status = Column(String(20), nullable=False, default="nao_iniciado")
+    # session_id do Didit — correlaciona o webhook (que só manda vendor_data,
+    # que é o próprio establishment_id) e permite "tentar novamente" saber se
+    # já existe sessão em aberto.
+    kyc_session_id = Column(String(64), nullable=True)
     description = Column(String(500), nullable=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
     # JSON string: {"monday": {"open": "08:00", "close": "19:00", "closed": false}, ...}

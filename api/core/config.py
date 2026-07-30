@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     google_places_api_key: str = ""
     places_default_radius_km: int = 5
 
+    # Didit — KYC (BIL-46). didit_webhook_secret vem do secret_shared_key
+    # devolvido ao registrar o destino em POST /v3/webhook/destinations/
+    # (setup manual, uma vez só — não por sessão).
+    didit_api_key: str = ""
+    didit_workflow_id: str = ""
+    didit_webhook_secret: str = ""
+
     # Quality thresholds
     min_quality_score: float = 0.6
     default_min_confidence: float = 0.75
