@@ -43,6 +43,17 @@ class Establishment(Base):
     email_verification_code = Column(String(6), nullable=True)
     email_verification_code_expires = Column(DateTime(timezone=True), nullable=True)
     email_verification_sent_at = Column(DateTime(timezone=True), nullable=True)
+    # BIL-112 — Asaas (cobrança). payment_status é varchar solto de propósito
+    # (não enum de banco): o ciclo de vida ainda vai ganhar estados novos
+    # (cancelamento, troca de plano) e não vale uma migration a cada um.
+    # Estados atuais: 'trial'|'ativo'|'em_carencia'|'inadimplente'|'cancelado'.
+    # payment_overdue_since é o âncora dos 7 dias de carência (ver
+    # _apply_grace_period_expiry em routers/pro.py) — setado no primeiro
+    # PAYMENT_OVERDUE, limpo assim que volta a confirmar pagamento.
+    asaas_customer_id = Column(String(32), nullable=True)
+    asaas_subscription_id = Column(String(32), nullable=True)
+    payment_status = Column(String(20), nullable=False, default="trial")
+    payment_overdue_since = Column(DateTime(timezone=True), nullable=True)
     description = Column(String(500), nullable=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
     # JSON string: {"monday": {"open": "08:00", "close": "19:00", "closed": false}, ...}

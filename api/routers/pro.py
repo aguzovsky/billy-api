@@ -38,7 +38,7 @@ from api.models.pro import (
     ProService,
     ProSubscription,
 )
-from api.services import storage, didit
+from api.services import storage, didit, asaas
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,7 @@ class EstablishmentOut(BaseModel):
     kyc_status: str
     terms_accepted_at: Optional[str]
     terms_version: Optional[str]
+    payment_status: str
     created_at: str
 
 
@@ -492,6 +493,7 @@ def _establishment_out(e: Establishment) -> dict:
         "kyc_status": e.kyc_status,
         "terms_accepted_at": e.terms_accepted_at.isoformat() if e.terms_accepted_at else None,
         "terms_version": e.terms_version,
+        "payment_status": e.payment_status,
         "created_at": e.created_at.isoformat(),
     }
 
@@ -744,6 +746,7 @@ async def get_me(
     establishment = result.scalar_one_or_none()
     if not establishment:
         raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+    await _apply_grace_period_expiry(establishment, db)
     return _establishment_out(establishment)
 
 
@@ -1551,6 +1554,11 @@ async def get_subscription(
     db: AsyncSession = Depends(get_db),
     establishment_id: str = Depends(get_current_establishment_id),
 ):
+    est_result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = est_result.scalar_one_or_none()
+    if establishment is not None:
+        await _apply_grace_period_expiry(establishment, db)
+
     result = await db.execute(
         select(ProSubscription).where(ProSubscription.establishment_id == UUID(establishment_id))
     )
@@ -1558,6 +1566,257 @@ async def get_subscription(
     if subscription is None:
         raise HTTPException(status_code=404, detail="Assinatura não encontrada")
     return _subscription_out(subscription)
+
+
+# ── Cobrança — BIL-112 (Asaas) ───────────────────────────────────────────
+# Sem checkout hospedado, sem formulário de cartão próprio (as duas ideias
+# anteriores esbarraram em limitações reais da API — ver investigação).
+# billingType=UNDEFINED na assinatura + redirect pro invoiceUrl (fatura
+# hospedada do Asaas): o pagador escolhe boleto/Pix/cartão lá, o backend
+# do Billy nunca toca em dado de cartão. Fonte de verdade do status é o
+# webhook, igual ao KYC — GET /subscription só lê o que já está gravado.
+#
+# asaas_customer_id/asaas_subscription_id/payment_status/
+# payment_overdue_since ficam em Establishment (não em ProSubscription) —
+# payment_status é a "verdade crua" do lado Asaas, incluindo o estado
+# intermediário de carência. ProSubscription.plan_id/status continuam
+# sendo o que hasModule() já lê no frontend — o rebaixamento após a
+# carência funciona rebaixando plan_id pro plano grátis do track, sem
+# tocar em nenhum código de gating existente.
+
+PLAN_TRACKS: dict[str, str] = {
+    "latido": "autonomo", "corrida": "autonomo", "matilha": "autonomo",
+    "coleira": "estabelecimento", "guia": "estabelecimento",
+    "alcateia": "estabelecimento", "territorio": "estabelecimento",
+}
+
+GRACE_PERIOD_DAYS = 7
+
+
+class SubscriptionSubscribeBody(BaseModel):
+    plan_id: str
+    billing_cycle: str  # 'mensal'|'anual'
+
+
+@router.post("/subscription/subscribe", summary="Assinar um plano pago (Asaas)")
+async def subscribe_to_plan(
+    body: SubscriptionSubscribeBody,
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    # Preço nunca vem do body — plan_id só é aceito se estiver no mapa de
+    # planos pagos (ver asaas.PLAN_PRICES), o valor cobrado é resolvido lá.
+    if body.plan_id not in asaas.PLAN_PRICES:
+        raise HTTPException(status_code=400, detail="Plano inválido ou não é um plano pago")
+    if body.billing_cycle not in ("mensal", "anual"):
+        raise HTTPException(status_code=400, detail="Ciclo de cobrança inválido")
+
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None:
+        raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
+
+    track = "autonomo" if establishment.type == "autonomo" else "estabelecimento"
+    if PLAN_TRACKS.get(body.plan_id) != track:
+        raise HTTPException(status_code=400, detail="Plano não disponível pra este tipo de conta")
+
+    # Gate de CPF/CNPJ — confirmado empiricamente que o Asaas rejeita
+    # BOLETO/PIX/CREDIT_CARD sem isso no customer. Barreira clara aqui,
+    # antes de chamar o Asaas, em vez do erro genérico deles estourando
+    # depois. Código estável pro frontend traduzir num link pra Settings.
+    if not establishment.cnpj and not establishment.cpf:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "cpf_cnpj_required", "message": "Complete seu CPF/CNPJ antes de assinar um plano pago."},
+        )
+
+    # Guarda simples contra assinatura duplicada — troca de plano/
+    # cancelamento in-app ainda não existem (próxima etapa), então por
+    # enquanto uma assinatura já ativa bloqueia criar outra.
+    if establishment.payment_status == "ativo" and establishment.asaas_subscription_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Você já tem uma assinatura ativa. Troca de plano ainda não está disponível — fale com a gente.",
+        )
+
+    try:
+        if establishment.asaas_customer_id:
+            customer_id = establishment.asaas_customer_id
+        else:
+            customer = await asaas.create_customer(
+                name=establishment.name,
+                cpf_cnpj=establishment.cnpj or establishment.cpf,
+                email=establishment.email,
+            )
+            customer_id = customer["id"]
+            establishment.asaas_customer_id = customer_id
+
+        subscription = await asaas.create_subscription(
+            customer_id=customer_id,
+            plan_id=body.plan_id,
+            cycle=body.billing_cycle,
+            establishment_id=establishment_id,
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error("Asaas create-subscription falhou: %s — %s", e.response.status_code, e.response.text)
+        raise HTTPException(status_code=502, detail="Não foi possível iniciar a assinatura. Tente novamente.")
+
+    establishment.asaas_subscription_id = subscription["id"]
+    await db.commit()
+
+    invoice_url = await asaas.get_current_invoice_url(subscription["id"])
+    if invoice_url is None:
+        raise HTTPException(status_code=502, detail="Assinatura criada, mas a fatura ainda não está pronta. Tente novamente em instantes.")
+
+    return {"url": invoice_url}
+
+
+@router.get("/subscription/invoice", summary="Fatura em aberto da assinatura atual")
+async def get_current_invoice(
+    db: AsyncSession = Depends(get_db),
+    establishment_id: str = Depends(get_current_establishment_id),
+):
+    # Pra quem já assina e precisa pagar de novo (boleto/Pix/débito geram
+    # fatura nova a cada ciclo — só cartão de crédito é recorrência
+    # automática de verdade, ver investigação).
+    result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
+    establishment = result.scalar_one_or_none()
+    if establishment is None or not establishment.asaas_subscription_id:
+        raise HTTPException(status_code=404, detail="Nenhuma assinatura encontrada")
+
+    invoice_url = await asaas.get_current_invoice_url(establishment.asaas_subscription_id)
+    if invoice_url is None:
+        raise HTTPException(status_code=404, detail="Nenhuma fatura em aberto no momento")
+    return {"url": invoice_url}
+
+
+async def _find_establishment_by_asaas_ids(payment: dict, db: AsyncSession) -> Establishment | None:
+    asaas_subscription_id = payment.get("subscription")
+    asaas_customer_id = payment.get("customer")
+
+    establishment = None
+    if asaas_subscription_id:
+        result = await db.execute(
+            select(Establishment).where(Establishment.asaas_subscription_id == asaas_subscription_id)
+        )
+        establishment = result.scalar_one_or_none()
+    if establishment is None and asaas_customer_id:
+        result = await db.execute(
+            select(Establishment).where(Establishment.asaas_customer_id == asaas_customer_id)
+        )
+        establishment = result.scalar_one_or_none()
+    return establishment
+
+
+async def _handle_payment_active(body_json: dict, db: AsyncSession) -> None:
+    payment = body_json.get("payment", {})
+    establishment = None
+
+    external_reference = payment.get("externalReference")
+    if external_reference:
+        parsed = asaas.parse_external_reference(external_reference)
+        if parsed:
+            establishment_id, plan_id, cycle = parsed
+            try:
+                establishment_uuid: UUID | None = UUID(establishment_id)
+            except ValueError:
+                establishment_uuid = None
+            if establishment_uuid:
+                result = await db.execute(select(Establishment).where(Establishment.id == establishment_uuid))
+                establishment = result.scalar_one_or_none()
+                if establishment:
+                    sub_result = await db.execute(
+                        select(ProSubscription).where(ProSubscription.establishment_id == establishment_uuid)
+                    )
+                    subscription = sub_result.scalar_one_or_none()
+                    if subscription:
+                        subscription.plan_id = plan_id
+                        subscription.status = "active"
+                        subscription.billing_cycle = "monthly" if cycle == "mensal" else "yearly"
+
+    # Sem externalReference (cobrança recorrente subsequente, não a
+    # primeira) — correlaciona pelo customer/subscription já persistidos
+    # na primeira confirmação.
+    if establishment is None:
+        establishment = await _find_establishment_by_asaas_ids(payment, db)
+
+    if establishment is None:
+        logger.warning("Webhook Asaas PAYMENT_CONFIRMED/RECEIVED sem estabelecimento correlacionável: %s", payment)
+        return
+
+    establishment.payment_status = "ativo"
+    establishment.payment_overdue_since = None
+    if payment.get("customer"):
+        establishment.asaas_customer_id = payment["customer"]
+    if payment.get("subscription"):
+        establishment.asaas_subscription_id = payment["subscription"]
+    await db.commit()
+
+
+async def _handle_payment_overdue(body_json: dict, db: AsyncSession) -> None:
+    payment = body_json.get("payment", {})
+    establishment = await _find_establishment_by_asaas_ids(payment, db)
+    if establishment is None:
+        logger.warning("Webhook Asaas PAYMENT_OVERDUE sem estabelecimento correlacionável: %s", payment)
+        return
+
+    # Carência: NÃO rebaixa acesso na hora — boleto leva 1-3 dias úteis pra
+    # compensar, rebaixar aqui bloquearia gente que já pagou. Só marca o
+    # início da carência (se ainda não estava em carência/inadimplente);
+    # o rebaixamento de verdade acontece em _apply_grace_period_expiry,
+    # 7 dias corridos depois, sem confirmação.
+    if establishment.payment_status not in ("em_carencia", "inadimplente"):
+        establishment.payment_status = "em_carencia"
+        establishment.payment_overdue_since = datetime.now(timezone.utc)
+        await db.commit()
+
+
+@router.post("/subscription/webhook", summary="Webhook do Asaas — atualiza payment_status do estabelecimento")
+async def subscription_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    # Sem get_current_establishment_id de propósito — quem chama é o Asaas,
+    # não um estabelecimento logado. Autenticação é o token compartilhado
+    # (asaas-access-token), não HMAC como o Didit.
+    token = request.headers.get("asaas-access-token", "")
+    if not asaas.verify_webhook_token(token):
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    body_json = await request.json()
+    event = body_json.get("event")
+
+    if event in ("PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"):
+        await _handle_payment_active(body_json, db)
+    elif event == "PAYMENT_OVERDUE":
+        await _handle_payment_overdue(body_json, db)
+    else:
+        logger.info("Webhook Asaas — evento sem tratamento: %s", event)
+
+    return {"ok": True}
+
+
+async def _apply_grace_period_expiry(establishment: Establishment, db: AsyncSession) -> None:
+    """Avaliação preguiçosa (sem cron/worker no projeto hoje) — roda nos
+    pontos onde o estabelecimento já é lido a cada request (GET /auth/me,
+    GET /subscription). Se os 7 dias de carência estouraram sem
+    confirmação, rebaixa pro plano grátis do track — reaproveita
+    hasModule/LockedModuleCard que já existe, sem tela de bloqueio nova.
+    Nunca apaga dado nenhum."""
+    if establishment.payment_status != "em_carencia" or establishment.payment_overdue_since is None:
+        return
+    elapsed = datetime.now(timezone.utc) - establishment.payment_overdue_since
+    if elapsed < timedelta(days=GRACE_PERIOD_DAYS):
+        return
+
+    establishment.payment_status = "inadimplente"
+
+    result = await db.execute(
+        select(ProSubscription).where(ProSubscription.establishment_id == establishment.id)
+    )
+    subscription = result.scalar_one_or_none()
+    if subscription:
+        track = "autonomo" if establishment.type == "autonomo" else "estabelecimento"
+        subscription.plan_id = "latido" if track == "autonomo" else "coleira"
+        subscription.status = "past_due"
+    await db.commit()
 
 
 # ── Billy Connect ────────────────────────────────────────────────────────

@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     didit_workflow_id: str = ""
     didit_webhook_secret: str = ""
 
+    # Asaas — cobrança recorrente (assinatura Billy Pro). asaas_webhook_token
+    # é gerado por nós (não pelo Asaas) ao registrar o webhook via
+    # POST /v3/webhooks — comparação simples, não HMAC como o Didit.
+    asaas_api_key: str = ""
+    asaas_webhook_token: str = ""
+
     # Quality thresholds
     min_quality_score: float = 0.6
     default_min_confidence: float = 0.75
