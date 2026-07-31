@@ -133,6 +133,28 @@ async def register_webhook(url: str, auth_token: str) -> dict[str, Any]:
         return response.json()
 
 
+def parse_error_message(response: httpx.Response) -> str | None:
+    """Se o corpo do erro do Asaas tiver `errors: [{code, description}]`
+    com algum invalid_object (ex: "CPF/CNPJ inválido"), devolve as
+    descrições concatenadas — mensagem acionável pro usuário em vez do
+    502 genérico. None se o corpo não tiver esse formato reconhecido
+    (aí quem chama cai no fallback genérico)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    errors = body.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return None
+    descriptions = [
+        e.get("description") for e in errors
+        if isinstance(e, dict) and e.get("code") == "invalid_object" and e.get("description")
+    ]
+    if not descriptions:
+        return None
+    return " ".join(descriptions)
+
+
 def verify_webhook_token(token_header: str) -> bool:
     return hmac.compare_digest(token_header or "", settings.asaas_webhook_token)
 

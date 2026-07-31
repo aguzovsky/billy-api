@@ -132,6 +132,54 @@ async def _check_services_per_day_limit(establishment_id: str, date_str: str, db
         )
 
 
+def _is_valid_cpf(digits: str) -> bool:
+    if len(digits) != 11 or digits == digits[0] * 11:
+        return False
+
+    def check_digit(base: str) -> str:
+        s = sum(int(d) * w for d, w in zip(base, range(len(base) + 1, 1, -1)))
+        r = s % 11
+        return "0" if r < 2 else str(11 - r)
+
+    d1 = check_digit(digits[:9])
+    d2 = check_digit(digits[:9] + d1)
+    return digits[-2:] == d1 + d2
+
+
+def _is_valid_cnpj(digits: str) -> bool:
+    if len(digits) != 14 or digits == digits[0] * 14:
+        return False
+
+    def check_digit(base: str, weights: list[int]) -> str:
+        s = sum(int(d) * w for d, w in zip(base, weights))
+        r = s % 11
+        return "0" if r < 2 else str(11 - r)
+
+    d1 = check_digit(digits[:12], [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    d2 = check_digit(digits[:13], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    return digits[-2:] == d1 + d2
+
+
+def _validate_cpf_cnpj(v: Optional[str]) -> Optional[str]:
+    """BIL-112 — barreira na origem (Settings), não só antes de assinar:
+    dígito verificador de CPF/CNPJ inválido nunca deveria chegar a ser
+    salvo, senão só aparece como 400 opaco do Asaas na hora de cobrar.
+    Vazio/None passa (campo opcional) — só valida o que foi de fato
+    preenchido."""
+    if not v:
+        return v
+    digits = re.sub(r"\D", "", v)
+    if len(digits) == 11:
+        if not _is_valid_cpf(digits):
+            raise ValueError("CPF inválido — confira os números digitados.")
+    elif len(digits) == 14:
+        if not _is_valid_cnpj(digits):
+            raise ValueError("CNPJ inválido — confira os números digitados.")
+    else:
+        raise ValueError("CPF deve ter 11 dígitos ou CNPJ 14 dígitos.")
+    return v
+
+
 def _validate_password_strength(password: str) -> str:
     """Valida força da senha: mín. 8 chars, 1 maiúscula, 1 número."""
     if len(password) < 8:
@@ -217,6 +265,11 @@ class EstablishmentUpdate(BaseModel):
         if v is not None and v not in ESTABLISHMENT_TYPES:
             raise ValueError(f"type deve ser um de: {', '.join(ESTABLISHMENT_TYPES)}")
         return v
+
+    @field_validator("cnpj", "cpf")
+    @classmethod
+    def cpf_cnpj_valid(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_cpf_cnpj(v)
 
 
 class TokenOut(BaseModel):
@@ -1659,6 +1712,13 @@ async def subscribe_to_plan(
         )
     except httpx.HTTPStatusError as e:
         logger.error("Asaas create-subscription falhou: %s — %s", e.response.status_code, e.response.text)
+        # invalid_object (ex: "O CPF/CNPJ informado é inválido.") é erro de
+        # dado, não falha de infra — repassa a mensagem real em vez do 502
+        # genérico. Passou pelo gate de checksum aqui mas o Asaas tem
+        # validação própria (às vezes mais rígida) — rede de segurança.
+        message = asaas.parse_error_message(e.response)
+        if message:
+            raise HTTPException(status_code=400, detail=message)
         raise HTTPException(status_code=502, detail="Não foi possível iniciar a assinatura. Tente novamente.")
 
     establishment.asaas_subscription_id = subscription["id"]
