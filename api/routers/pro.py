@@ -1649,6 +1649,10 @@ GRACE_PERIOD_DAYS = 7
 class SubscriptionSubscribeBody(BaseModel):
     plan_id: str
     billing_cycle: str  # 'mensal'|'anual'
+    # BIL-112 — callback.successUrl do Asaas (URL de retorno pós-pagamento).
+    # Vem do frontend, não montado aqui — mesmo padrão do callback_url do
+    # KYC (Didit): o backend não hardcoda domínio de frontend por ambiente.
+    return_url: str
 
 
 @router.post("/subscription/subscribe", summary="Assinar um plano pago (Asaas)")
@@ -1709,6 +1713,7 @@ async def subscribe_to_plan(
             plan_id=body.plan_id,
             cycle=body.billing_cycle,
             establishment_id=establishment_id,
+            success_url=body.return_url,
         )
     except httpx.HTTPStatusError as e:
         logger.error("Asaas create-subscription falhou: %s — %s", e.response.status_code, e.response.text)

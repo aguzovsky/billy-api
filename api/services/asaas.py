@@ -73,16 +73,30 @@ def parse_external_reference(value: str) -> tuple[str, str, str] | None:
 
 
 async def create_subscription(
-    *, customer_id: str, plan_id: str, cycle: str, establishment_id: str,
+    *, customer_id: str, plan_id: str, cycle: str, establishment_id: str, success_url: str,
 ) -> dict[str, Any]:
     """billingType=UNDEFINED — o pagador escolhe boleto/Pix/cartão de
     crédito/débito na fatura hospedada (invoiceUrl) do Payment gerado.
     Confirmado na doc: só cartão de crédito vira recorrência automática de
     verdade (Asaas guarda o cartão do lado deles, cobra sozinho nos ciclos
     seguintes); boleto/Pix/débito geram fatura nova a cada ciclo que o
-    pagador precisa pagar de novo."""
+    pagador precisa pagar de novo.
+
+    callback.successUrl (confirmado em docs.asaas.com/docs/
+    redirecionamento-apos-o-pagamento) — sem isso o pagador fica preso na
+    fatura do Asaas depois de pagar, sem link de volta. autoRedirect=True
+    só funciona de fato pra cartão/Pix (confirmação instantânea); boleto
+    sempre cai no botão manual "Ir para o site" independente disso.
+
+    Testado empiricamente: sem nenhum domínio cadastrado na conta do Asaas
+    (BIL-125, ação manual do Alexandre, ainda pendente), a API rejeita a
+    criação da assinatura INTEIRA com 400 se `callback` estiver presente —
+    não é "cria mas ignora o campo". Por isso tenta com callback primeiro
+    e cai pra sem callback só nesse erro específico: assinar continua
+    funcionando hoje, e o redirect passa a funcionar sozinho assim que o
+    domínio for cadastrado, sem precisar de deploy novo."""
     price = PLAN_PRICES[plan_id][cycle]
-    body = {
+    base_body: dict[str, Any] = {
         "customer": customer_id,
         "billingType": "UNDEFINED",
         "value": price,
@@ -90,10 +104,32 @@ async def create_subscription(
         "cycle": _CYCLE_MAP[cycle],
         "externalReference": build_external_reference(establishment_id, plan_id, cycle),
     }
+    body_with_callback = {**base_body, "callback": {"successUrl": success_url, "autoRedirect": True}}
+
     async with httpx.AsyncClient() as client:
-        response = await client.post(f"{ASAAS_BASE_URL}/subscriptions", headers=_headers(), json=body, timeout=15)
+        response = await client.post(f"{ASAAS_BASE_URL}/subscriptions", headers=_headers(), json=body_with_callback, timeout=15)
+        if response.status_code == 400 and _is_domain_not_configured_error(response):
+            _log.warning(
+                "Asaas rejeitou callback.successUrl (domínio não cadastrado na conta — BIL-125 pendente); "
+                "criando assinatura sem callback."
+            )
+            response = await client.post(f"{ASAAS_BASE_URL}/subscriptions", headers=_headers(), json=base_body, timeout=15)
         response.raise_for_status()
         return response.json()
+
+
+def _is_domain_not_configured_error(response: httpx.Response) -> bool:
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    errors = body.get("errors")
+    if not isinstance(errors, list):
+        return False
+    return any(
+        isinstance(e, dict) and e.get("code") == "invalid_object" and "domínio configurado" in (e.get("description") or "")
+        for e in errors
+    )
 
 
 async def get_current_invoice_url(subscription_id: str) -> str | None:
