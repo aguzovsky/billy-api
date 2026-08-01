@@ -1,6 +1,5 @@
 """Integração com o Asaas (cobrança recorrente — assinatura Billy Pro).
-Doc: docs.asaas.com. Sandbox por enquanto — não trocar ASAAS_BASE_URL pra
-produção sem decisão explícita.
+Doc: docs.asaas.com.
 
 Desenho final (BIL-112): sem checkout hospedado, sem formulário de cartão
 próprio (as duas ideias anteriores esbarraram em limitações reais da API —
@@ -22,7 +21,11 @@ from api.core.config import settings
 
 _log = logging.getLogger(__name__)
 
-ASAAS_BASE_URL = "https://api-sandbox.asaas.com/v3"
+# BIL-129 — só produção usa api.asaas.com de verdade (dinheiro real).
+# Qualquer outro APP_ENV (staging, development, ou não setado) cai em
+# sandbox por padrão — nunca o contrário, o erro seguro aqui é sandbox
+# de mais, não produção de menos.
+ASAAS_BASE_URL = "https://api.asaas.com/v3" if settings.app_env == "production" else "https://api-sandbox.asaas.com/v3"
 
 # Espelha src/data/plans.ts (Billy Pro) — preço nunca vem do cliente, é
 # sempre resolvido aqui a partir do plan_id antes de criar a cobrança no
