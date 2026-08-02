@@ -37,6 +37,10 @@ class Establishment(Base):
     # avança pro KYC.
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
     terms_version = Column(String(20), nullable=True)
+    # BIL-137 — consentimento pro dado biométrico do KYC, separado do aceite
+    # geral acima (LGPD art. 11, dado sensível exige aceite explícito próprio).
+    # Setado quando a pessoa realmente inicia o KYC, não na criação da conta.
+    biometric_consent_accepted_at = Column(DateTime(timezone=True), nullable=True)
     # BIL-44 — verificação de e-mail do Pro, código de 6 dígitos (não link
     # como o Billy App usa em User — roda dentro do fluxo de completar
     # perfil, sem sair pro e-mail). sent_at é só pro cooldown de reenvio.

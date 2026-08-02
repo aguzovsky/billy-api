@@ -201,6 +201,12 @@ class EstablishmentRegister(BaseModel):
     password: str
     whatsapp: Optional[str] = None
     city: Optional[str] = None
+    # BIL-137 — cadastro em 3 passos: Termos de Uso + Política de Privacidade
+    # são aceitos no Passo 2, no momento de criar a conta de verdade. Não
+    # confia só em "a chamada foi feita" como prova de aceite (mesmo
+    # raciocínio de TermsAcceptBody abaixo) — exige o boolean explícito.
+    accepted_terms: bool
+    terms_version: str
 
     @field_validator("type")
     @classmethod
@@ -213,6 +219,13 @@ class EstablishmentRegister(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         return _validate_password_strength(v)
+
+    @field_validator("accepted_terms")
+    @classmethod
+    def accepted_terms_required(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("É necessário aceitar os Termos de Uso e a Política de Privacidade.")
+        return v
 
 
 class EstablishmentLogin(BaseModel):
@@ -240,6 +253,7 @@ class EstablishmentOut(BaseModel):
     kyc_status: str
     terms_accepted_at: Optional[str]
     terms_version: Optional[str]
+    biometric_consent_accepted_at: Optional[str]
     payment_status: str
     created_at: str
 
@@ -546,6 +560,7 @@ def _establishment_out(e: Establishment) -> dict:
         "kyc_status": e.kyc_status,
         "terms_accepted_at": e.terms_accepted_at.isoformat() if e.terms_accepted_at else None,
         "terms_version": e.terms_version,
+        "biometric_consent_accepted_at": e.biometric_consent_accepted_at.isoformat() if e.biometric_consent_accepted_at else None,
         "payment_status": e.payment_status,
         "created_at": e.created_at.isoformat(),
     }
@@ -750,6 +765,8 @@ async def register(body: EstablishmentRegister, db: AsyncSession = Depends(get_d
         hashed_password=hash_password(body.password),
         whatsapp=body.whatsapp,
         city=body.city,
+        terms_accepted_at=datetime.now(timezone.utc),
+        terms_version=body.terms_version,
     )
     db.add(establishment)
     await db.commit()
@@ -2265,11 +2282,18 @@ async def kyc_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
-# ── Termos e Privacidade — LGPD (BIL-46/parte-legal) ─────────────────────
+# ── Termos e Privacidade — LGPD (BIL-46/parte-legal, BIL-137) ────────────
 # KYC pede documento + biometria — LGPD exige consentimento específico e
 # destacado pra dado sensível (art. 11), separado do aceite geral. Por
 # isso o frontend manda os dois booleans aqui: se qualquer um vier False,
 # rejeita — não confia só em "a chamada foi feita" como prova de aceite.
+#
+# BIL-137 — desde o cadastro em 3 passos, terms_accepted_at já é gravado na
+# criação da conta (aceite geral). Esse endpoint continua sendo o gate do
+# consentimento biométrico (sempre exigido aqui), mas só volta a gravar
+# terms_accepted_at se ainda não existir — contas antigas (pré-BIL-137)
+# que nunca aceitaram nada continuam pedindo os dois checkboxes juntos,
+# contas novas só precisam do checkbox biométrico na hora do KYC.
 
 class TermsAcceptBody(BaseModel):
     terms_version: str
@@ -2277,22 +2301,27 @@ class TermsAcceptBody(BaseModel):
     accepted_biometric_consent: bool
 
 
-@router.post("/terms/accept", summary="Registrar aceite dos Termos de Uso e Política de Privacidade")
+@router.post("/terms/accept", summary="Registrar consentimento biométrico (e Termos, se ainda pendente)")
 async def accept_terms(
     body: TermsAcceptBody,
     db: AsyncSession = Depends(get_db),
     establishment_id: str = Depends(get_current_establishment_id),
 ):
-    if not body.accepted_terms or not body.accepted_biometric_consent:
-        raise HTTPException(status_code=400, detail="É necessário aceitar os Termos e o consentimento de dado biométrico.")
+    if not body.accepted_biometric_consent:
+        raise HTTPException(status_code=400, detail="É necessário aceitar o consentimento de dado biométrico.")
 
     result = await db.execute(select(Establishment).where(Establishment.id == UUID(establishment_id)))
     establishment = result.scalar_one_or_none()
     if establishment is None:
         raise HTTPException(status_code=404, detail="Estabelecimento não encontrado")
 
-    establishment.terms_accepted_at = datetime.now(timezone.utc)
-    establishment.terms_version = body.terms_version
+    if establishment.terms_accepted_at is None:
+        if not body.accepted_terms:
+            raise HTTPException(status_code=400, detail="É necessário aceitar os Termos de Uso e a Política de Privacidade.")
+        establishment.terms_accepted_at = datetime.now(timezone.utc)
+        establishment.terms_version = body.terms_version
+
+    establishment.biometric_consent_accepted_at = datetime.now(timezone.utc)
     await db.commit()
 
     return {"ok": True}
