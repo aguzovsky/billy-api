@@ -250,6 +250,7 @@ class EstablishmentOut(BaseModel):
     opening_hours: Optional[str]
     is_email_verified: bool
     onboarding_completed: bool
+    onboarding_wizard_completed_at: Optional[str]
     kyc_status: str
     terms_accepted_at: Optional[str]
     terms_version: Optional[str]
@@ -272,6 +273,7 @@ class EstablishmentUpdate(BaseModel):
     tags: Optional[list[str]] = None
     opening_hours: Optional[str] = None
     onboarding_completed: Optional[bool] = None
+    onboarding_wizard_completed: Optional[bool] = None
 
     @field_validator("type")
     @classmethod
@@ -557,6 +559,7 @@ def _establishment_out(e: Establishment) -> dict:
         "photo_url": e.photo_url,
         "is_email_verified": e.is_email_verified,
         "onboarding_completed": e.onboarding_completed,
+        "onboarding_wizard_completed_at": e.onboarding_wizard_completed_at.isoformat() if e.onboarding_wizard_completed_at else None,
         "kyc_status": e.kyc_status,
         "terms_accepted_at": e.terms_accepted_at.isoformat() if e.terms_accepted_at else None,
         "terms_version": e.terms_version,
@@ -857,6 +860,8 @@ async def update_me(
         establishment.opening_hours = body.opening_hours
     if body.onboarding_completed is not None:
         establishment.onboarding_completed = body.onboarding_completed
+    if body.onboarding_wizard_completed and establishment.onboarding_wizard_completed_at is None:
+        establishment.onboarding_wizard_completed_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(establishment)

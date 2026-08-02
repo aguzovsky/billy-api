@@ -68,6 +68,13 @@ class Establishment(Base):
     # BIL-101 — onboarding guiado (4 slides, só track autônomo por enquanto).
     # Dispara no Dashboard enquanto False; PATCH /pro/auth/me marca True.
     onboarding_completed = Column(Boolean, nullable=False, default=False)
+    # BIL-147 — gate do wizard de onboarding (BIL-16), separado do campo
+    # acima de propósito (ver migration 0032): o wizard e a tour guiada nem
+    # sempre terminam no mesmo momento (plano pago sai da SPA antes da tour
+    # rodar), reusar o mesmo campo pros dois quebraria o disparo automático
+    # dela. Fonte de verdade de needsOnboarding() no frontend — antes disso
+    # era só localStorage, por navegador/dispositivo.
+    onboarding_wizard_completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True),
                         default=lambda: datetime.now(timezone.utc),
