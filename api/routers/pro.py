@@ -98,8 +98,10 @@ def _check_not_past(date_str: str, time_str: str) -> None:
 # repos (TS front / Python back) — mudar o limite de um plano precisa
 # atualizar os dois lados. Plano ausente daqui = sem limite de serviços/dia
 # (Matilha, todo Track B).
+# BIL-144: latido 2→3 (decisão do Alexandre — 2 restringia trabalho normal
+# de profissional ativo, não só uso excessivo).
 PLAN_SERVICES_PER_DAY: dict[str, int] = {
-    "latido": 2,
+    "latido": 3,
     "corrida": 3,
 }
 
@@ -126,9 +128,17 @@ async def _check_services_per_day_limit(establishment_id: str, date_str: str, db
         )
     )
     if count_result.scalar_one() >= limit:
+        # BIL-144 — code estruturado (mesmo padrão de cpf_cnpj_required) pra
+        # NewAppointmentModal.tsx não depender de "todo 403 nesse endpoint é
+        # sempre isso" — a mensagem específica (quantos usou, qual plano
+        # resolve) é montada no frontend com dado que ele já tem (lista de
+        # agendamentos + PLANS), essa mensagem aqui é só fallback genérico.
         raise HTTPException(
             status_code=403,
-            detail=f"Limite de {limit} serviços por dia do plano {subscription.plan_id.capitalize()} atingido. Faça upgrade para continuar.",
+            detail={
+                "code": "daily_service_limit_reached",
+                "message": f"Limite de {limit} serviços por dia do plano {subscription.plan_id.capitalize()} atingido. Faça upgrade para continuar.",
+            },
         )
 
 
