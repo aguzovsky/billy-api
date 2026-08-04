@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Seed idempotente de contas de teste (BIL-148) em staging.
 
-Cria (ou reseta pro estado esperado, se já existirem) duas contas
-sintéticas pra smoke test manual do Billy Connect:
+Cria (ou reseta pro estado esperado, se já existirem) contas sintéticas
+pra smoke test manual do Billy Connect:
 
-  1. Tutor (Billy App): smoketest.tutor.bil148@example.com + pet "Rex".
-  2. Profissional autônomo (Billy Pro): smoketest.pro.bil148@example.com
-     + 1 cliente com telefone igual ao do tutor acima.
+  - 1 profissional autônomo (Billy Pro): smoketest.pro.bil148@example.com.
+  - N pares tutor+cliente, cada um provando um fluxo diferente:
+      par 1 — smoketest.tutor.bil148@example.com + pet "Rex" +
+              "Cliente Teste BIL148" (telefone 11972793795).
+              Prova o fluxo principal (convite -> aceite -> vínculo) —
+              NÃO MEXER nos dados desse par depois de já confirmado,
+              ele é a prova do fluxo principal.
+      par 2 — smoketest.tutor2.bil148@example.com + pet "Bolt" +
+              "Cliente Teste BIL148 v2" (telefone 11972793796).
+              Par isolado pra testar recusa + reenvio sem tocar no par 1.
 
-Nenhum dos dois fica travado em gate de verificação (email/KYC) —
-os campos são setados direto no banco, sem passar pelos fluxos reais
-de e-mail/Didit, porque servem só pra destravar teste manual.
+Nenhuma conta fica travada em gate de verificação (email/KYC) — os
+campos são setados direto no banco, sem passar pelos fluxos reais de
+e-mail/Didit, porque servem só pra destravar teste manual.
 
 Como rodar (SEMPRE via `railway run`, nunca com DATABASE_URL na mão):
 
@@ -92,46 +99,59 @@ from api.core.security import hash_password  # noqa: E402
 from api.models.pet import Pet, User  # noqa: E402
 from api.models.pro import Establishment, ProClient, ProPet, ProSubscription  # noqa: E402
 
-TUTOR_EMAIL = "smoketest.tutor.bil148@example.com"
-TUTOR_PHONE = "11972793795"
-TUTOR_PASSWORD = "Teste@123"
-TUTOR_PET_NAME = "Rex"
-
 PRO_EMAIL = "smoketest.pro.bil148@example.com"
 PRO_PASSWORD = "Teste@123"
 PRO_NAME = "Maria Teste BIL148"
-PRO_CLIENT_NAME = "Cliente Teste BIL148"
+
+TUTORS = [
+    dict(
+        name="Tutor Teste BIL148",
+        email="smoketest.tutor.bil148@example.com",
+        phone="11972793795",
+        password="Teste@123",
+        pet_name="Rex",
+        client_name="Cliente Teste BIL148",
+    ),
+    dict(
+        name="Tutor Teste BIL148 v2",
+        email="smoketest.tutor2.bil148@example.com",
+        phone="11972793796",
+        password="Teste@123",
+        pet_name="Bolt",
+        client_name="Cliente Teste BIL148 v2",
+    ),
+]
 
 
-async def seed_tutor(db) -> User:
-    result = await db.execute(select(User).where(User.email == TUTOR_EMAIL))
+async def seed_tutor(db, spec: dict) -> tuple[User, Pet]:
+    result = await db.execute(select(User).where(User.email == spec["email"]))
     user = result.scalar_one_or_none()
 
     if user is None:
         user = User(
-            name="Tutor Teste BIL148",
-            email=TUTOR_EMAIL,
-            hashed_password=hash_password(TUTOR_PASSWORD),
-            contact_phone=TUTOR_PHONE,
+            name=spec["name"],
+            email=spec["email"],
+            hashed_password=hash_password(spec["password"]),
+            contact_phone=spec["phone"],
             email_verified=True,
             email_verified_at=datetime.now(timezone.utc),
         )
         db.add(user)
     else:
-        user.hashed_password = hash_password(TUTOR_PASSWORD)
-        user.contact_phone = TUTOR_PHONE
+        user.hashed_password = hash_password(spec["password"])
+        user.contact_phone = spec["phone"]
         user.email_verified = True
         user.email_verified_at = user.email_verified_at or datetime.now(timezone.utc)
 
     await db.flush()
 
     pet_result = await db.execute(
-        select(Pet).where(Pet.owner_id == user.id, Pet.name == TUTOR_PET_NAME)
+        select(Pet).where(Pet.owner_id == user.id, Pet.name == spec["pet_name"])
     )
     pet = pet_result.scalar_one_or_none()
     if pet is None:
         pet = Pet(
-            name=TUTOR_PET_NAME,
+            name=spec["pet_name"],
             species="dog",
             breed="SRD",
             owner_id=user.id,
@@ -144,10 +164,10 @@ async def seed_tutor(db) -> User:
         pet.breed = "SRD"
 
     await db.flush()
-    return user
+    return user, pet
 
 
-async def seed_pro(db) -> Establishment:
+async def seed_establishment(db) -> Establishment:
     result = await db.execute(select(Establishment).where(Establishment.email == PRO_EMAIL))
     establishment = result.scalar_one_or_none()
 
@@ -189,34 +209,39 @@ async def seed_pro(db) -> Establishment:
         )
         db.add(subscription)
 
+    await db.flush()
+    return establishment
+
+
+async def seed_pro_client(db, establishment: Establishment, spec: dict) -> tuple[ProClient, ProPet]:
     client_result = await db.execute(
         select(ProClient).where(
             ProClient.establishment_id == establishment.id,
-            ProClient.contact_phone == TUTOR_PHONE,
+            ProClient.contact_phone == spec["phone"],
         )
     )
     client = client_result.scalar_one_or_none()
     if client is None:
         client = ProClient(
             establishment_id=establishment.id,
-            name=PRO_CLIENT_NAME,
-            contact_phone=TUTOR_PHONE,
+            name=spec["client_name"],
+            contact_phone=spec["phone"],
         )
         db.add(client)
     else:
-        client.name = PRO_CLIENT_NAME
+        client.name = spec["client_name"]
 
     await db.flush()
 
     pet_result = await db.execute(
-        select(ProPet).where(ProPet.client_id == client.id, ProPet.name == TUTOR_PET_NAME)
+        select(ProPet).where(ProPet.client_id == client.id, ProPet.name == spec["pet_name"])
     )
     pro_pet = pet_result.scalar_one_or_none()
     if pro_pet is None:
         pro_pet = ProPet(
             client_id=client.id,
             establishment_id=establishment.id,
-            name=TUTOR_PET_NAME,
+            name=spec["pet_name"],
             species="dog",
             breed="SRD",
         )
@@ -226,46 +251,41 @@ async def seed_pro(db) -> Establishment:
         pro_pet.breed = "SRD"
 
     await db.flush()
-    return establishment
+    return client, pro_pet
 
 
 async def main() -> None:
     async with AsyncSessionLocal() as db:
-        tutor = await seed_tutor(db)
-        establishment = await seed_pro(db)
+        tutors = [await seed_tutor(db, spec) for spec in TUTORS]
+        establishment = await seed_establishment(db)
+        pro_clients = [await seed_pro_client(db, establishment, spec) for spec in TUTORS]
         await db.commit()
 
-        await db.refresh(tutor)
         await db.refresh(establishment)
+        for user, pet in tutors:
+            await db.refresh(user)
+            await db.refresh(pet)
+        for client, pro_pet in pro_clients:
+            await db.refresh(client)
+            await db.refresh(pro_pet)
 
-        pet_result = await db.execute(select(Pet).where(Pet.owner_id == tutor.id, Pet.name == TUTOR_PET_NAME))
-        pet = pet_result.scalar_one()
-
-        client_result = await db.execute(
-            select(ProClient).where(
-                ProClient.establishment_id == establishment.id,
-                ProClient.contact_phone == TUTOR_PHONE,
-            )
-        )
-        client = client_result.scalar_one()
-
-        pro_pet_result = await db.execute(select(ProPet).where(ProPet.client_id == client.id, ProPet.name == TUTOR_PET_NAME))
-        pro_pet = pro_pet_result.scalar_one()
-
-    print("=== Tutor (Billy App) ===")
-    print(f"  id: {tutor.id}")
-    print(f"  email: {tutor.email}  (email_verified={tutor.email_verified})")
-    print(f"  contact_phone: {tutor.contact_phone}")
-    print(f"  pet: {pet.name} ({pet.species}/{pet.breed})  id={pet.id}")
-    print()
     print("=== Profissional (Billy Pro, autônomo) ===")
     print(f"  id: {establishment.id}")
     print(f"  email: {establishment.email}  (is_email_verified={establishment.is_email_verified})")
     print(f"  kyc_status: {establishment.kyc_status}")
-    print(f"  cliente: {client.name}  contact_phone={client.contact_phone}  id={client.id}")
-    print(f"  pet do cliente: {pro_pet.name} ({pro_pet.species}/{pro_pet.breed})  id={pro_pet.id}")
     print()
-    print("Ambos os logins prontos, sem gate pendente (email/KYC já marcados).")
+
+    for spec, (user, pet), (client, pro_pet) in zip(TUTORS, tutors, pro_clients):
+        print(f"=== Par: {spec['client_name']} ===")
+        print(f"  tutor id: {user.id}")
+        print(f"  tutor email: {user.email}  (email_verified={user.email_verified})")
+        print(f"  tutor contact_phone: {user.contact_phone}")
+        print(f"  pet do tutor: {pet.name} ({pet.species}/{pet.breed})  id={pet.id}")
+        print(f"  cliente: {client.name}  contact_phone={client.contact_phone}  id={client.id}")
+        print(f"  pet do cliente: {pro_pet.name} ({pro_pet.species}/{pro_pet.breed})  id={pro_pet.id}")
+        print()
+
+    print("Todos os logins prontos, sem gate pendente (email/KYC já marcados).")
 
 
 if __name__ == "__main__":
