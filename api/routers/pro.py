@@ -2018,31 +2018,37 @@ async def billy_connect_request(
     if pet is None:
         raise HTTPException(status_code=404, detail="Pet não encontrado")
 
-    if pet.billy_pet_id is not None:
-        raise HTTPException(status_code=409, detail="Este pet já está conectado ao Billy App")
-
     client_result = await db.execute(select(ProClient).where(ProClient.id == pet.client_id))
     client = client_result.scalar_one_or_none()
     if client is None:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
 
+    # BIL-148 — gate é por relação (cliente), não mais por pet: um cliente já
+    # conectado não pode receber outro convite, não importa de qual pet o
+    # profissional clicou "conectar" (o botão continua existindo por pet no
+    # Pro — body.pro_pet_id — mas o efeito é sempre no cliente inteiro).
+    if client.billy_user_id is not None:
+        raise HTTPException(status_code=409, detail="Este cliente já está conectado ao Billy App")
+
     client_phone = _normalize_phone(client.contact_phone)
     if not client_phone:
         raise HTTPException(status_code=404, detail="Cliente ainda não tem o Billy App")
 
-    # Reaproveita convite pendente e não-expirado já existente, em vez de
-    # empilhar convites/push duplicados a cada clique no botão.
+    # BIL-148 — dedup e reenvio por cliente, não mais por pet: convite
+    # pendente existente é reaproveitado (sem empilhar push duplicado);
+    # convite recusado é reaberto — reenvio "sem limite" é requisito do
+    # modelo novo, e reabrir preserva o histórico numa linha só por
+    # cliente em vez de acumular convites recusados.
     existing_result = await db.execute(
         select(ProConnectInvite).where(
-            ProConnectInvite.pro_pet_id == pro_pet_uuid,
-            ProConnectInvite.status == "pending",
-            ProConnectInvite.expires_at > datetime.now(timezone.utc),
-        )
+            ProConnectInvite.pro_client_id == client.id,
+            ProConnectInvite.status.in_(["pending", "declined"]),
+        ).order_by(ProConnectInvite.created_at.desc())
     )
-    existing_invite = existing_result.scalar_one_or_none()
-    if existing_invite is not None:
-        return {"id": str(existing_invite.id), "status": existing_invite.status,
-                "expires_at": existing_invite.expires_at.isoformat()}
+    existing_invite = existing_result.scalars().first()
+
+    if existing_invite is not None and existing_invite.status == "pending":
+        return {"id": str(existing_invite.id), "status": existing_invite.status}
 
     users_result = await db.execute(select(User).where(User.fcm_token.isnot(None)))
     app_user = next(
@@ -2057,15 +2063,21 @@ async def billy_connect_request(
     )
     establishment = establishment_result.scalar_one_or_none()
 
-    invite = ProConnectInvite(
-        pro_pet_id=pro_pet_uuid,
-        pro_client_id=client.id,
-        establishment_id=UUID(establishment_id),
-        app_user_id=app_user.id,
-        status="pending",
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=48),
-    )
-    db.add(invite)
+    if existing_invite is not None:
+        invite = existing_invite
+        invite.pro_pet_id = pro_pet_uuid
+        invite.status = "pending"
+        invite.app_user_id = app_user.id
+    else:
+        invite = ProConnectInvite(
+            pro_pet_id=pro_pet_uuid,
+            pro_client_id=client.id,
+            establishment_id=UUID(establishment_id),
+            app_user_id=app_user.id,
+            status="pending",
+        )
+        db.add(invite)
+
     client.billy_profile_status = "convite_pendente"
     await db.commit()
     await db.refresh(invite)
@@ -2076,7 +2088,9 @@ async def billy_connect_request(
                 messaging.Message(
                     notification=messaging.Notification(
                         title=establishment.name if establishment else "Billy",
-                        body=f"quer conectar {pet.name} ao Billy. Toque para confirmar.",
+                        # BIL-148 — sem nome de pet: a conexão nunca é
+                        # exibida como sendo sobre um pet específico.
+                        body="quer se conectar com você no Billy. Toque para confirmar.",
                     ),
                     data={"type": "billy_connect_request", "invite_id": str(invite.id)},
                     token=app_user.fcm_token,
@@ -2085,7 +2099,7 @@ async def billy_connect_request(
         except Exception as e:
             logger.warning("FCM send failed (billy-connect): %s", e)
 
-    return {"id": str(invite.id), "status": invite.status, "expires_at": invite.expires_at.isoformat()}
+    return {"id": str(invite.id), "status": invite.status}
 
 
 # ── Central de ajuda — BIL-102 ───────────────────────────────────────────

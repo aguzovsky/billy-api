@@ -120,7 +120,11 @@ class ProClient(Base):
     neighborhood = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
     billy_user_id = Column(UUID(as_uuid=True), nullable=True)  # ponte futura com User do App
-    # 'conectado'|'convite_pendente'|'nao_conectado'
+    # 'conectado'|'convite_pendente'|'nao_conectado'|'recusado'
+    # BIL-148 — 'recusado' é novo: antes um decline revertia direto pra
+    # 'nao_conectado', sem distinguir "nunca convidado" de "convidado e
+    # recusou". Billy_connect.py decline_invite() seta; billy_connect_request
+    # reabre pra 'convite_pendente' no reenvio.
     billy_profile_status = Column(String(20), nullable=False, default="nao_conectado")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -181,26 +185,37 @@ class ProPetGuardian(Base):
     client = relationship("ProClient")
 
 
-# BIL-39 — Billy Connect. Ponte real entre um pro_pet/pro_client já
-# cadastrado no Pro e o usuário/pet correspondente no Billy App, via
-# push nativo (sem QR code). app_user_id/app_pet_id ficam sem FK de
-# propósito — cruzam pro Base do App (users/pets), mesmo padrão já
-# usado em ProPet.billy_pet_id / ProClient.billy_user_id, que também
-# não têm FK. app_pet_id só é preenchido no accept, quando o tutor
-# escolhe qual pet é (pode ter mais de um cadastrado no App).
+# BIL-39/BIL-148 — Billy Connect. Ponte real entre um pro_client já
+# cadastrado no Pro e o usuário correspondente no Billy App, via push
+# nativo (sem QR code). app_user_id fica sem FK de propósito — cruza
+# pro Base do App (users), mesmo padrão já usado em ProClient.
+# billy_user_id, que também não tem FK.
+#
+# BIL-148 — modelo mudou de "por pet" pra "por relação tutor↔
+# profissional": pro_client_id (já existia, já era NOT NULL) é o
+# ponto de ancoragem de verdade agora. pro_pet_id virou opcional (0033)
+# — só registra qual pet motivou o convite quando ele nasce a partir
+# de um pet específico (fluxo atual do Pro), não decide mais o que
+# fica conectado: aceitar vincula billy_user_id no cliente e
+# billy_pet_id em TODOS os pro_pets do cliente que derem match por
+# nome com os pets do tutor no App (owner ou guardião — ver
+# accept_invite). app_pet_id também ficou vestigial pelo mesmo motivo
+# — não populamos mais em convite novo, mas fica pra não perder
+# histórico de convites antigos que ainda tinham o conceito de "um
+# pet só". expires_at virou opcional (0033) — convite não expira mais.
 class ProConnectInvite(Base):
     __tablename__ = "pro_connect_invites"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    pro_pet_id = Column(UUID(as_uuid=True), ForeignKey("pro_pets.id", ondelete="CASCADE"), nullable=False)
+    pro_pet_id = Column(UUID(as_uuid=True), ForeignKey("pro_pets.id", ondelete="CASCADE"), nullable=True)
     pro_client_id = Column(UUID(as_uuid=True), ForeignKey("pro_clients.id", ondelete="CASCADE"), nullable=False)
     establishment_id = Column(UUID(as_uuid=True), ForeignKey("establishments.id", ondelete="CASCADE"),
                                nullable=False)
     app_user_id = Column(UUID(as_uuid=True), nullable=True)
     app_pet_id = Column(UUID(as_uuid=True), nullable=True)
-    status = Column(String(20), nullable=False, default="pending")  # 'pending'|'confirmed'|'declined'|'expired'
+    status = Column(String(20), nullable=False, default="pending")  # 'pending'|'confirmed'|'declined'
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 
     pro_pet = relationship("ProPet")
     pro_client = relationship("ProClient")
