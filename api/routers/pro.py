@@ -596,10 +596,13 @@ def _client_out(c: ProClient) -> dict:
 
 # BIL-106 — dado real do pet (App) fluindo pro Pro em conexões já
 # confirmadas (billy_pet_id preenchido). Nome fica como "apelido": o real_name
-# vem à parte, name/species/breed/biometry_status de pro_pets continuam
-# intocados (nunca sobrescritos/apagados) — é enriquecimento aditivo de
-# leitura, sem migration. real_* e has_biometria vêm null quando o pet não
-# está conectado (billy_pet_id vazio) ou quando o Pet real não é encontrado.
+# vem à parte, name/species/breed/biometry_status/special_characteristics de
+# pro_pets continuam intocados (nunca sobrescritos/apagados) — é
+# enriquecimento aditivo de leitura, sem migration. real_* e has_biometria
+# vêm null quando o pet não está conectado (billy_pet_id vazio) ou quando o
+# Pet real não é encontrado. real_special_characteristics é coluna de texto
+# simples em pets — sem relação com health_events (histórico clínico
+# continua fora de escopo, não sincroniza).
 def _pet_out(p: ProPet, real_pet: Pet | None = None, has_biometria: bool | None = None) -> dict:
     return {
         "id": str(p.id),
@@ -619,6 +622,7 @@ def _pet_out(p: ProPet, real_pet: Pet | None = None, has_biometria: bool | None 
         "real_name": real_pet.name if real_pet else None,
         "real_species": real_pet.species if real_pet else None,
         "real_breed": real_pet.breed if real_pet else None,
+        "real_special_characteristics": real_pet.special_characteristics if real_pet else None,
         "has_biometria": has_biometria,
     }
 
