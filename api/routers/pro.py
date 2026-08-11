@@ -25,7 +25,8 @@ from api.core.security import (
     verify_password,
 )
 from api.data.pet_breeds import BREEDS_BY_SPECIES
-from api.models.pet import User
+from api.models.biometry import Biometric
+from api.models.pet import Pet, User
 from api.models.pro import (
     Establishment,
     ProAppointment,
@@ -593,7 +594,13 @@ def _client_out(c: ProClient) -> dict:
     }
 
 
-def _pet_out(p: ProPet) -> dict:
+# BIL-106 — dado real do pet (App) fluindo pro Pro em conexões já
+# confirmadas (billy_pet_id preenchido). Nome fica como "apelido": o real_name
+# vem à parte, name/species/breed/biometry_status de pro_pets continuam
+# intocados (nunca sobrescritos/apagados) — é enriquecimento aditivo de
+# leitura, sem migration. real_* e has_biometria vêm null quando o pet não
+# está conectado (billy_pet_id vazio) ou quando o Pet real não é encontrado.
+def _pet_out(p: ProPet, real_pet: Pet | None = None, has_biometria: bool | None = None) -> dict:
     return {
         "id": str(p.id),
         "client_id": str(p.client_id),
@@ -609,7 +616,47 @@ def _pet_out(p: ProPet) -> dict:
         "billy_pet_id": str(p.billy_pet_id) if p.billy_pet_id else None,
         "photo_url": p.photo_url,
         "created_at": p.created_at.isoformat(),
+        "real_name": real_pet.name if real_pet else None,
+        "real_species": real_pet.species if real_pet else None,
+        "real_breed": real_pet.breed if real_pet else None,
+        "has_biometria": has_biometria,
     }
+
+
+async def _real_pet_data(p: ProPet, db: AsyncSession) -> tuple[Pet | None, bool | None]:
+    """Lookup pontual (1 pet) do dado real do App pra uma conexão já
+    confirmada. BIL-106."""
+    if p.billy_pet_id is None:
+        return None, None
+    result = await db.execute(select(Pet).where(Pet.id == p.billy_pet_id))
+    real_pet = result.scalar_one_or_none()
+    if real_pet is None:
+        return None, None
+    bio_result = await db.execute(
+        select(Biometric.pet_id).where(Biometric.pet_id == real_pet.id).limit(1)
+    )
+    return real_pet, bio_result.scalar_one_or_none() is not None
+
+
+async def _real_pet_data_map(pro_pets: list[ProPet], db: AsyncSession) -> dict:
+    """Mesma coisa que _real_pet_data, em lote — 2 queries pra N pets em vez
+    de N, pros endpoints de listagem. BIL-106. Chave: billy_pet_id (UUID);
+    ausente do dict = não conectado ou Pet real não encontrado."""
+    billy_ids = [p.billy_pet_id for p in pro_pets if p.billy_pet_id is not None]
+    if not billy_ids:
+        return {}
+
+    pets_result = await db.execute(select(Pet).where(Pet.id.in_(billy_ids)))
+    real_pets = {rp.id: rp for rp in pets_result.scalars().all()}
+    if not real_pets:
+        return {}
+
+    bio_result = await db.execute(
+        select(Biometric.pet_id).where(Biometric.pet_id.in_(real_pets.keys())).distinct()
+    )
+    pets_with_bio = set(bio_result.scalars().all())
+
+    return {pet_id: (real_pet, pet_id in pets_with_bio) for pet_id, real_pet in real_pets.items()}
 
 
 def _guardian_out(g: ProPetGuardian, client: ProClient) -> dict:
@@ -1109,9 +1156,11 @@ async def get_client(
 ):
     client = await _get_client(client_id, establishment_id, db)
     pets_result = await db.execute(select(ProPet).where(ProPet.client_id == client.id))
+    pets = list(pets_result.scalars().all())
+    real_data = await _real_pet_data_map(pets, db)
     return {
         **_client_out(client),
-        "pets": [_pet_out(p) for p in pets_result.scalars().all()],
+        "pets": [_pet_out(p, *real_data.get(p.billy_pet_id, (None, None))) for p in pets],
     }
 
 
@@ -1163,7 +1212,9 @@ async def list_pets(
 ):
     await _get_client(client_id, establishment_id, db)
     result = await db.execute(select(ProPet).where(ProPet.client_id == client_id))
-    return [_pet_out(p) for p in result.scalars().all()]
+    pets = list(result.scalars().all())
+    real_data = await _real_pet_data_map(pets, db)
+    return [_pet_out(p, *real_data.get(p.billy_pet_id, (None, None))) for p in pets]
 
 
 @router.post("/pets", status_code=status.HTTP_201_CREATED, summary="Criar pet")
@@ -1179,7 +1230,7 @@ async def create_pet(
     db.add(pet)
     await db.commit()
     await db.refresh(pet)
-    return _pet_out(pet)
+    return _pet_out(pet, *await _real_pet_data(pet, db))
 
 
 @router.patch("/pets/{pet_id}", summary="Atualizar pet")
@@ -1220,7 +1271,7 @@ async def update_pet(
 
     await db.commit()
     await db.refresh(pet)
-    return _pet_out(pet)
+    return _pet_out(pet, *await _real_pet_data(pet, db))
 
 
 @router.patch("/pets/{pet_id}/photo", summary="Upload foto do pet")
@@ -1385,7 +1436,7 @@ async def promote_pet_owner(
 
     await db.commit()
     await db.refresh(pet)
-    return _pet_out(pet)
+    return _pet_out(pet, *await _real_pet_data(pet, db))
 
 
 # ── Appointments ─────────────────────────────────────────────────────────
@@ -1939,7 +1990,7 @@ async def billy_connect_pet(
     client = client_result.scalar_one_or_none()
 
     return {
-        "pet": _pet_out(pet),
+        "pet": _pet_out(pet, *await _real_pet_data(pet, db)),
         "client": {
             "name": client.name if client else None,
             "contact_phone": client.contact_phone if client else None,
