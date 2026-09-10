@@ -56,6 +56,10 @@ def verify_webhook_signature(body_json: Any, signature_header: str, timestamp_he
     (chaves ordenadas, separadores compactos, unicode preservado) assinado
     com HMAC-SHA256, comparação em tempo constante. Timestamp precisa estar
     dentro de 300s pra evitar replay."""
+    if not settings.didit_webhook_secret:
+        _log.warning("DIDIT_WEBHOOK_SECRET não configurado — recusando verificação de webhook.")
+        return False
+
     try:
         if abs(int(time.time()) - int(timestamp_header)) > 300:
             return False
