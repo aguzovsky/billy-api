@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
+import sentry_sdk
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.core.config import settings
@@ -19,27 +20,59 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(subject: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    return jwt.encode(
-        {"sub": subject, "exp": expire},
-        settings.secret_key,
-        algorithm=settings.algorithm,
-    )
+def create_access_token(subject: str, extra_claims: dict | None = None, expires_minutes: int | None = None) -> str:
+    minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    payload = {"sub": subject, "exp": expire}
+    if extra_claims:
+        payload.update(extra_claims)
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def decode_token_payload(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        if payload.get("sub") is None:
+            raise ValueError("missing sub")
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from e
 
 
 def decode_token(token: str) -> str:
-    try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-        sub: str = payload.get("sub")
-        if sub is None:
-            raise ValueError("missing sub")
-        return sub
-    except JWTError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from e
+    return decode_token_payload(token)["sub"]
 
 
 async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> str:
     return decode_token(credentials.credentials)
+
+
+async def get_current_establishment_id(
+    response: Response,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> str:
+    payload = decode_token_payload(credentials.credentials)
+    if payload.get("type") != "establishment":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token não pertence a um estabelecimento")
+
+    establishment_id = payload["sub"]
+
+    # BIL-100: identifica no Sentry só o ID (sem nome/telefone/CPF, sem
+    # send_default_pii — ver api/main.py) — roda em toda requisição
+    # autenticada de /pro/*, já que este dependency é o ponto único por onde
+    # todas elas passam.
+    sentry_sdk.set_user({"id": establishment_id})
+
+    # Sessão deslizante: toda chamada autenticada de sucesso renova o token (só
+    # expira de vez após pro_access_token_expire_minutes de inatividade real).
+    # Isolado do Billy App — este dependency só é usado por api/routers/pro.py.
+    refreshed = create_access_token(
+        establishment_id,
+        extra_claims={"type": "establishment"},
+        expires_minutes=settings.pro_access_token_expire_minutes,
+    )
+    response.headers["X-Refreshed-Token"] = refreshed
+
+    return establishment_id

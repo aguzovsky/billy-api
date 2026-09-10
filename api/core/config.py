@@ -9,7 +9,13 @@ class Settings(BaseSettings):
     )
 
     # Environment
-    app_env: str = "production"  # set APP_ENV=staging on Railway staging service
+    # Default "development" de propósito (BIL-104 parte 2) — sem isso local
+    # dev e produção eram indistinguíveis (nenhum dos dois setava a env var),
+    # o que fazia o Sentry marcar erro de teste local como produção. Staging
+    # seta APP_ENV=staging (Railway), produção agora precisa setar
+    # APP_ENV=production explicitamente — não dá mais pra confiar no default
+    # pra isso.
+    app_env: str = "development"
 
     # Database
     database_url: str = "postgresql+asyncpg://billy:billy@localhost/billy"
@@ -21,6 +27,11 @@ class Settings(BaseSettings):
     secret_key: str = "changeme"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+
+    # Auth — Billy Pro (establishments). Separado do valor acima de propósito: sessão
+    # deslizante do Pro (renovada a cada chamada, ver get_current_establishment_id)
+    # não deve alterar a duração da sessão dos tutores do Billy App.
+    pro_access_token_expire_minutes: int = 1440
 
     # Model
     model_weights_dir: str = "./weights"
@@ -54,6 +65,19 @@ class Settings(BaseSettings):
     # Google Places
     google_places_api_key: str = ""
     places_default_radius_km: int = 5
+
+    # Didit — KYC (BIL-46). didit_webhook_secret vem do secret_shared_key
+    # devolvido ao registrar o destino em POST /v3/webhook/destinations/
+    # (setup manual, uma vez só — não por sessão).
+    didit_api_key: str = ""
+    didit_workflow_id: str = ""
+    didit_webhook_secret: str = ""
+
+    # Asaas — cobrança recorrente (assinatura Billy Pro). asaas_webhook_token
+    # é gerado por nós (não pelo Asaas) ao registrar o webhook via
+    # POST /v3/webhooks — comparação simples, não HMAC como o Didit.
+    asaas_api_key: str = ""
+    asaas_webhook_token: str = ""
 
     # Quality thresholds
     min_quality_score: float = 0.6

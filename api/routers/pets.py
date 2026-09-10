@@ -56,12 +56,41 @@ async def create_pet(
         breed=body.breed,
         color=body.color,    # NOVO
         gender=body.gender,  # NOVO
+        special_characteristics=body.special_characteristics,
         owner_id=UUID(user_id),
     )
     db.add(pet)
     await db.commit()
     await db.refresh(pet)
     return _serialize(pet, has_biometry=False)
+
+
+class PetUpdate(BaseModel):
+    # Só special_characteristics por ora — gap específico (schema de create
+    # já aceitava o campo, mas nada persistia). Não reabre os outros campos
+    # editáveis do pet aqui.
+    special_characteristics: Optional[str] = None
+
+
+@router.patch("/{pet_id}", summary="Atualizar pet (special_characteristics)")
+async def update_pet(
+    pet_id: UUID,
+    body: PetUpdate,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = await db.execute(select(Pet).where(Pet.id == pet_id, Pet.owner_id == UUID(user_id)))
+    pet = result.scalar_one_or_none()
+    if pet is None:
+        raise HTTPException(status_code=404, detail="Pet not found or not owned by you")
+
+    if body.special_characteristics is not None:
+        pet.special_characteristics = body.special_characteristics
+
+    await db.commit()
+    await db.refresh(pet)
+    has_bio = await db.scalar(select(func.count()).where(Biometric.pet_id == pet.id)) > 0
+    return _serialize(pet, has_biometry=has_bio)
 
 
 @router.patch("/{pet_id}/photo", summary="Upload de foto do pet")
@@ -305,6 +334,7 @@ def _serialize(pet: Pet, has_biometry: bool = False, registrations: list | None 
         "breed": pet.breed,
         "color": pet.color,
         "gender": pet.gender,
+        "special_characteristics": pet.special_characteristics,
         "owner_id": str(pet.owner_id),
         "registrations": [
             {"id": str(r.id), "type": r.type, "type_label": r.type_label, "number": r.number}
