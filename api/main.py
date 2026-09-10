@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.config import settings
 from api.core.database import get_db
 from api.models.pet import Pet, PetFoundContact as _pfc_model  # noqa: F401 — registers with Base
 from api.models.pet import User
@@ -24,12 +25,30 @@ from api.models import pet_photo as _pet_photo_model  # noqa: F401 — registers
 from api.models import health as _health_model  # noqa: F401 — registers HealthEvent with Base
 from api.models import consent as _consent_model  # noqa: F401 — registers UserConsent with Base
 from api.routers import auth, alerts, biometry, pets, guardians, services, ai, pet_photos, health, consents, notify, pet_registrations
+from api.routers import pro
+from api.routers import billy_connect
 
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN", "https://80417d985fc75686827188afff05bce0@o4511469145423873.ingest.us.sentry.io/4511469149945856"),
-    environment=os.getenv("ENVIRONMENT", "production"),
-    traces_sample_rate=0.1,
-)
+# BIL-100 — projeto "billy-api" na org billy-app (Sentry), cobre todo o
+# backend (Billy App consumer + Billy Pro juntos, sem separação por produto
+# aqui — quem lê o erro distingue pela rota: /api/v1/pro/* é Pro, o resto é
+# App). send_default_pii=False (decisão revista — nada de IP/headers/corpo
+# de requisição automático). Rastreabilidade de qual estabelecimento teve o
+# erro vem de sentry_sdk.set_user({"id": establishment_id}) em
+# get_current_establishment_id (api/core/security.py) — só o ID, chamado em
+# toda requisição autenticada de /pro/*, sem nome/telefone/CPF.
+#
+# BIL-104 parte 2: o `environment=` antigo lia uma env var (ENVIRONMENT) que
+# nunca era setada em lugar nenhum — sempre caía no default "production",
+# inclusive rodando local. Corrigido pra usar settings.app_env (a mesma
+# fonte que já distingue staging via APP_ENV no Railway). Em "development"
+# nem inicializa: dev local não deve gerar evento nenhum no Sentry.
+if settings.app_env != "development":
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN", "https://467f06fe16bf1e0e544bc87c2adea7f8@o4511469145423873.ingest.us.sentry.io/4511791475458048"),
+        environment=settings.app_env,
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +81,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # X-Refreshed-Token (sessão deslizante do Billy Pro) é header customizado — sem
+    # expose_headers o browser recebe mas o JS não consegue ler via fetch().
+    expose_headers=["X-Refreshed-Token"],
 )
 
 API_PREFIX = "/api/v1"
@@ -77,6 +99,8 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(consents.router, prefix=API_PREFIX)
 app.include_router(notify.router, prefix=API_PREFIX)
 app.include_router(pet_registrations.router, prefix=API_PREFIX)
+app.include_router(pro.router, prefix=API_PREFIX)
+app.include_router(billy_connect.router, prefix=API_PREFIX)
 
 
 @app.get("/pet/{pet_id}", response_class=HTMLResponse, tags=["public"], include_in_schema=False)

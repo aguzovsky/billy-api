@@ -1,0 +1,5 @@
+# Submódulo de pesquisa/treino (Pet Re-ID) — não é importado por api/ em
+# runtime (extração de embedding roda remota, via MODAL_ENDPOINT_URL).
+# Só existe localmente pra treino/experimentos, ~3GB, estourava o limite
+# de upload do `railway up`.
+Pet-ReID-IMAG/
