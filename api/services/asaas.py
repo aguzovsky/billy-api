@@ -195,6 +195,9 @@ def parse_error_message(response: httpx.Response) -> str | None:
 
 
 def verify_webhook_token(token_header: str) -> bool:
+    if not settings.asaas_webhook_token:
+        _log.warning("ASAAS_WEBHOOK_TOKEN não configurado — recusando verificação de webhook.")
+        return False
     return hmac.compare_digest(token_header or "", settings.asaas_webhook_token)
 
 
