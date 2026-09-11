@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -33,6 +33,7 @@ class User(Base):
     state = Column(String(2), nullable=True)
     whatsapp = Column(String(20), nullable=True)
     fcm_token = Column(String(255), nullable=True)
+    app_build_number = Column(Integer, nullable=True)
     deletion_requested = Column(Boolean, nullable=False, default=False)
     deletion_requested_at = Column(DateTime(timezone=True), nullable=True)
 

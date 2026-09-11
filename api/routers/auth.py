@@ -144,6 +144,7 @@ class UpdateProfileRequest(BaseModel):
     state: str | None = None
     whatsapp: str | None = None
     fcm_token: str | None = None
+    app_build_number: int | None = None
 
     @field_validator("cpf")
     @classmethod
@@ -217,6 +218,8 @@ async def update_me(
         user.whatsapp = body.whatsapp
     if body.fcm_token is not None:
         user.fcm_token = body.fcm_token
+    if body.app_build_number is not None:
+        user.app_build_number = body.app_build_number
 
     await db.commit()
     await db.refresh(user)

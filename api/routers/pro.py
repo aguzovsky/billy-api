@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import firebase_admin
 import httpx
+import sentry_sdk
 from firebase_admin import credentials, messaging
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, EmailStr, ValidationError, field_validator
@@ -2039,6 +2040,12 @@ def _normalize_phone(phone: Optional[str]) -> str:
     return digits
 
 
+# BIL-162 — build mínima do app que sabe tratar o convite inline (BIL-148).
+# Builds anteriores recebem o push mas o tap não navega pra lugar nenhum —
+# falha silenciosa. Abaixo dela, recusamos o convite antes de criá-lo.
+MIN_BUILD_BILLY_CONNECT = 15
+
+
 class BillyConnectRequestBody(BaseModel):
     pro_pet_id: str
 
@@ -2112,6 +2119,11 @@ async def billy_connect_request(
     )
     if app_user is None:
         raise HTTPException(status_code=404, detail="Cliente ainda não tem o Billy App")
+    if app_user.app_build_number is None or app_user.app_build_number < MIN_BUILD_BILLY_CONNECT:
+        raise HTTPException(
+            status_code=409,
+            detail="O tutor precisa atualizar o app Billy para usar o Billy Connect.",
+        )
 
     establishment_result = await db.execute(
         select(Establishment).where(Establishment.id == UUID(establishment_id))
@@ -2153,6 +2165,7 @@ async def billy_connect_request(
             )
         except Exception as e:
             logger.warning("FCM send failed (billy-connect): %s", e)
+            sentry_sdk.capture_exception(e)
 
     return {"id": str(invite.id), "status": invite.status}
 
